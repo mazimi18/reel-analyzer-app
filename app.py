@@ -1,6 +1,5 @@
 # ===================================================================================
-# FINAL v6.2 app.py - Enhanced UI/UX, Bonus AI Features, and Conversational Chatbot
-# This version fixes the "start_chat() takes 1 positional argument" error.
+# FINAL v6.3 app.py - Model changed to Gemini 1.5 Flash to avoid rate limits
 # ===================================================================================
 import os
 import google.generativeai as genai
@@ -77,9 +76,10 @@ def main_analysis_and_chat_setup(video_path, funnel_stage, metrics, deeper_analy
     st.session_state.video_file_name = video_file.name
     
     progress_bar.progress(60, text="Video processed. Generating initial analysis...")
-    model = genai.GenerativeModel(model_name="gemini-1.5-pro-latest")
     
-    # [THE FIX IS HERE] Added the 'history=' keyword argument.
+    # [THE FIX IS HERE] Using the more generous 'flash' model instead of 'pro'.
+    model = genai.GenerativeModel(model_name="gemini-1.5-flash-latest")
+    
     st.session_state.chat = model.start_chat(history=[
         {"role": "user", "parts": [video_file, "Analyze this video based on my next instructions."]},
         {"role": "model", "parts": ["I have received the video. I am ready for your analysis instructions."]}
