@@ -1,6 +1,7 @@
 # ===================================================================================
-# FINAL v9.7 app.py - Rate Limit Fix
-# This version adds a time.sleep(1) to prevent ResourceExhausted errors.
+# FINAL v10.0 app.py - Robust API Retry Logic
+# This version implements exponential backoff to handle API rate limits gracefully
+# and prevent crashes from ResourceExhausted errors.
 # ===================================================================================
 import os
 import io
@@ -9,7 +10,7 @@ import google.generativeai as genai
 import streamlit as st
 import pandas as pd
 import tempfile
-import time # <--- Make sure time is imported
+import time
 
 # --- Configuration and Page Setup ---
 st.set_page_config(
@@ -28,9 +29,34 @@ except (TypeError, KeyError):
     st.error("🚨 A required GOOGLE_API_KEY secret is missing! Please check your secrets.", icon="❗")
     st.stop()
 
+# --- NEW: ROBUST API CALLER WITH RETRY LOGIC ---
+def generate_with_retry(model, prompt_parts, retries=5, base_delay=5):
+    """
+    Calls the Google API with exponential backoff to handle rate limiting.
+    """
+    num_attempts = 0
+    while num_attempts < retries:
+        try:
+            # Make the API call
+            response = model.generate_content(prompt_parts)
+            # If successful, return the response and break the loop
+            return response
+        except google.api_core.exceptions.ResourceExhausted as e:
+            num_attempts += 1
+            if num_attempts < retries:
+                st.warning(f"API rate limit hit. Retrying in {base_delay} seconds... (Attempt {num_attempts}/{retries})", icon="⏳")
+                time.sleep(base_delay)
+                base_delay *= 2  # Double the delay for the next attempt
+            else:
+                st.error(f"API rate limit error after {retries} retries. The API is too busy. Please wait a few minutes and try again.")
+                raise e # Re-raise the final exception to stop the app
+        except Exception as e:
+            # Handle other potential errors
+            st.error(f"An unexpected error occurred during API call: {e}")
+            raise e
+
 # --- AI PROMPT ENGINEERING (Unchanged) ---
 def create_individual_analysis_prompt(filename, kpi_data):
-    """Creates a prompt for a CONCISE analysis of a SINGLE video."""
     return f"""
     Analyze the creative of the video named '{filename}'.
     The video's performance metrics are: {kpi_data}
@@ -38,7 +64,6 @@ def create_individual_analysis_prompt(filename, kpi_data):
     """
 
 def create_campaign_synthesis_prompt(all_individual_summaries, funnel_stage):
-    """Creates the master prompt to analyze the entire campaign with weighted logic."""
     priority_metrics = {
         "Awareness": "impressions, high Video View Rate, and low CPM",
         "Traffic": "high Click-Through Rate (CTR) and low Cost Per Click (CPC)",
@@ -46,25 +71,17 @@ def create_campaign_synthesis_prompt(all_individual_summaries, funnel_stage):
     }
     return f"""
     You are a world-class digital marketing campaign strategist analyzing a '{funnel_stage}' campaign. Your primary goal is to identify winning creative strategies based on performance data. For this '{funnel_stage}' campaign, you should prioritize results that show **{priority_metrics.get(funnel_stage, "strong overall performance")}**.
-
     I have provided you with concise summaries of every video in the campaign.
-
     **Individual Video Summaries:**
     ---
     {all_individual_summaries}
     ---
-
     **Your Task:**
     Produce a strategic report with these three sections, using H3 markdown headers (e.g., ### Section Name):
-
     ### 1. Campaign Performance Scorecard
-    Create a Markdown table ranking the videos from best to worst. The ranking MUST be based on the KPIs most relevant to a '{funnel_stage}' campaign goal.
-    The table needs three columns: "Rank", "Video Name", and "Ranking Justification".
-    In the "Ranking Justification" column, briefly explain *why* each video earned its rank, referencing its key performance metrics and connecting them to the campaign goal. For example: "Ranked #1 due to its exceptional CTR and low CPC, indicating it was highly effective at driving efficient traffic."
-
+    Create a Markdown table ranking the videos from best to worst. The ranking MUST be based on the KPIs most relevant to a '{funnel_stage}' campaign goal. The table needs three columns: "Rank", "Video Name", and "Ranking Justification". In the "Ranking Justification" column, briefly explain *why* each video earned its rank, referencing its key performance metrics and connecting them to the campaign goal. For example: "Ranked #1 due to its exceptional CTR and low CPC, indicating it was highly effective at driving efficient traffic."
     ### 2. Common Themes in Top Performers
     Identify 2-3 common creative elements, strategies, or visual styles shared by the top 2-3 performing videos. Explain *why* you believe these themes resonated with the audience for this campaign type.
-
     ### 3. Actionable Recommendations
     Provide three clear, specific, and actionable recommendations for the creative team to implement in the next campaign to maximize performance. These should be based directly on the findings from the scorecard and common themes.
     """
@@ -72,6 +89,7 @@ def create_campaign_synthesis_prompt(all_individual_summaries, funnel_stage):
 # --- UI FUNCTION to parse and display the report (Unchanged) ---
 def parse_report_and_display(report_text, all_kpis):
     st.subheader("🏆 Your Strategic Report", anchor=False)
+    # ... (This function remains the same as before)
     scorecard_match = re.search(r"### 1\. Campaign Performance Scorecard\s*\n*(.*?)(\n###|$)", report_text, re.DOTALL | re.IGNORECASE)
     themes_match = re.search(r"### 2\. Common Themes in Top Performers\s*\n*(.*?)(\n###|$)", report_text, re.DOTALL | re.IGNORECASE)
     recs_match = re.search(r"### 3\. Actionable Recommendations\s*\n*(.*)", report_text, re.DOTALL | re.IGNORECASE)
@@ -100,13 +118,15 @@ def parse_report_and_display(report_text, all_kpis):
     if recs_match:
         with st.expander("**Actionable Recommendations**"): st.markdown(recs_match.group(1).strip())
 
-# --- REBUILT State-Based Function with Rate-Limit Fix ---
+
+# --- REBUILT State-Based Function with Robust Retry Logic ---
 def render_campaign_tab(funnel_stage):
     session_state_key = f"analysis_state_{funnel_stage}"
     if session_state_key not in st.session_state:
         st.session_state[session_state_key] = {"status": "not_started", "files": [], "kpis": {}, "manual_kpis": {}}
 
     if st.session_state[session_state_key]["status"] == "not_started":
+        # ... (This entire "not_started" block is the same as before) ...
         with st.container(border=True):
             st.subheader("Step 1: Upload Assets", anchor=False, help="Upload your videos and an optional CSV with performance metrics.")
             col1, col2 = st.columns(2)
@@ -167,44 +187,62 @@ def render_campaign_tab(funnel_stage):
                                 os.remove(tmp.name)
                             except Exception as e: st.error(f"Failed to upload '{file.name}': {e}")
                     st.session_state[session_state_key]["status"] = "processing"; st.rerun()
+
     elif st.session_state[session_state_key]["status"] == "processing":
         st.info("🔄 Videos are being processed by Google...", icon="⏳")
         st.write("Click the button below to check the status. Once all videos are ready, the report will be generated.")
         if st.button("Check Status & Generate Report", use_container_width=True, key=f"check_button_{funnel_stage.lower()}"):
             all_files_ready = True
             with st.spinner("Checking file statuses..."):
+                # ... (This status check block is the same as before) ...
                 for file_info in st.session_state[session_state_key]["files"]:
                     if file_info["status"] == "processing":
                         api_file = genai.get_file(name=file_info["api_file_name"])
                         if api_file.state.name == "ACTIVE": file_info["status"] = "active"; st.success(f"✅ '{file_info['original_filename']}' is ready.")
                         elif api_file.state.name == "FAILED": file_info["status"] = "failed"; st.error(f"❌ Processing failed for '{file_info['original_filename']}'.")
                         else: all_files_ready = False; st.info(f"⏳ '{file_info['original_filename']}' is still processing...")
+
             if all_files_ready:
                 with st.spinner("All files ready! Generating individual and final reports..."):
-                    individual_summaries, active_files = [], [f for f in st.session_state[session_state_key]["files"] if f["status"] == 'active']
-                    for file_info in active_files:
-                        original_filename = file_info["original_filename"]
-                        kpis = st.session_state[session_state_key]["kpis"].get(original_filename, {})
-                        kpi_text = ", ".join([f"{k}: {v}" for k, v in kpis.items() if v])
-                        prompt = create_individual_analysis_prompt(original_filename, kpi_text)
-                        api_file = genai.get_file(name=file_info["api_file_name"])
-                        response = genai.GenerativeModel(model_name="gemini-1.5-flash-latest").generate_content([prompt, api_file])
-                        individual_summaries.append(f"**Video: {original_filename}**\n{response.text}\n\n")
+                    try:
+                        individual_summaries, active_files = [], [f for f in st.session_state[session_state_key]["files"] if f["status"] == 'active']
                         
-                        # =========================================================================
-                        # THE FIX IS HERE: Add a 1-second delay to avoid rate limiting
-                        # =========================================================================
-                        time.sleep(1)
+                        # Set up the models once
+                        flash_model = genai.GenerativeModel(model_name="gemini-1.5-flash-latest")
+                        pro_model = genai.GenerativeModel(model_name="gemini-1.5-pro-latest")
 
-                    if individual_summaries:
-                        synthesis_prompt = create_campaign_synthesis_prompt("".join(individual_summaries), funnel_stage)
-                        final_response = genai.GenerativeModel(model_name="gemini-1.5-pro-latest").generate_content(synthesis_prompt)
-                        st.session_state[session_state_key]["final_report"] = final_response.text
-                        st.session_state[session_state_key]["status"] = "complete"
-                        for file_info in st.session_state[session_state_key]["files"]:
-                            try: genai.delete_file(name=file_info["api_file_name"])
-                            except Exception: pass
-                        st.rerun()
+                        for file_info in active_files:
+                            original_filename = file_info["original_filename"]
+                            kpis = st.session_state[session_state_key]["kpis"].get(original_filename, {})
+                            kpi_text = ", ".join([f"{k}: {v}" for k, v in kpis.items() if v])
+                            
+                            prompt = create_individual_analysis_prompt(original_filename, kpi_text)
+                            api_file = genai.get_file(name=file_info["api_file_name"])
+                            
+                            # --- USE THE ROBUST CALLER ---
+                            response = generate_with_retry(flash_model, [prompt, api_file])
+                            individual_summaries.append(f"**Video: {original_filename}**\n{response.text}\n\n")
+
+                        if individual_summaries:
+                            synthesis_prompt = create_campaign_synthesis_prompt("".join(individual_summaries), funnel_stage)
+                            
+                            # --- USE THE ROBUST CALLER FOR THE FINAL REPORT ---
+                            final_response = generate_with_retry(pro_model, synthesis_prompt)
+                            
+                            st.session_state[session_state_key]["final_report"] = final_response.text
+                            st.session_state[session_state_key]["status"] = "complete"
+                            
+                            # Cleanup files
+                            for file_info in st.session_state[session_state_key]["files"]:
+                                try: genai.delete_file(name=file_info["api_file_name"])
+                                except Exception: pass
+                            st.rerun()
+                    except Exception as e:
+                        # This will catch the error if generate_with_retry finally fails
+                        st.error("Failed to generate the final report after multiple attempts. Please try again later.")
+                        # Optionally, reset the state to allow the user to try again
+                        st.session_state[session_state_key]["status"] = "processing" # Go back to the check status page
+
     elif st.session_state[session_state_key]["status"] == "complete":
         parse_report_and_display(st.session_state[session_state_key].get("final_report", "Report not found."), st.session_state[session_state_key].get("kpis", {}))
         if st.button(f"↩️ Start New {funnel_stage} Analysis", use_container_width=True, key=f"reset_button_{funnel_stage.lower()}"):
