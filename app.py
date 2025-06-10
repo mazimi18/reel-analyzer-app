@@ -1,121 +1,9 @@
 # ===================================================================================
-# FINAL v9.5 app.py - True Dynamic KPIs (CSV or Manual)
-# This version adapts to ANY KPIs from a CSV or allows full manual entry.
+# CORRECTED and more ROBUST render_campaign_tab function
 # ===================================================================================
-import os
-import io
-import re
-import google.generativeai as genai
-import streamlit as st
-import pandas as pd
-import tempfile
-
-# --- Configuration and Page Setup ---
-st.set_page_config(
-    page_title="AI Campaign Strategist",
-    page_icon="🧠",
-    layout="wide"
-)
-st.title("🧠🏆 AI Campaign Strategist")
-st.markdown("##### Upload your campaign videos and a CSV of their metrics. Get an expert-level strategic report on what creative works... and *why*.")
-
-
-# --- Secret & API Configuration ---
-try:
-    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-except (TypeError, KeyError):
-    st.error("🚨 A required GOOGLE_API_KEY secret is missing! Please check your secrets.", icon="❗")
-    st.stop()
-
-# --- AI PROMPT ENGINEERING (Unchanged - Already Flexible) ---
-def create_individual_analysis_prompt(filename, kpi_data):
-    """Creates a prompt for a CONCISE analysis of a SINGLE video."""
-    return f"""
-    Analyze the creative of the video named '{filename}'.
-    The video's performance metrics are: {kpi_data}
-    Your Task: Provide a brief, one-paragraph summary (under 80 words). Focus on the visual and narrative elements. Identify the single most impactful creative element that likely drove these results and explain why. Be direct and concise.
-    """
-
-def create_campaign_synthesis_prompt(all_individual_summaries, funnel_stage):
-    """Creates the master prompt to analyze the entire campaign with weighted logic."""
-    priority_metrics = {
-        "Awareness": "impressions, high Video View Rate, and low CPM",
-        "Traffic": "high Click-Through Rate (CTR) and low Cost Per Click (CPC)",
-        "Conversion": "high Return On Ad Spend (ROAS), high number of Purchases/Leads, and low Cost Per Acquisition (CPA)"
-    }
-    return f"""
-    You are a world-class digital marketing campaign strategist analyzing a '{funnel_stage}' campaign. Your primary goal is to identify winning creative strategies based on performance data. For this '{funnel_stage}' campaign, you should prioritize results that show **{priority_metrics.get(funnel_stage, "strong overall performance")}**.
-
-    I have provided you with concise summaries of every video in the campaign.
-
-    **Individual Video Summaries:**
-    ---
-    {all_individual_summaries}
-    ---
-
-    **Your Task:**
-    Produce a strategic report with these three sections, using H3 markdown headers (e.g., ### Section Name):
-
-    ### 1. Campaign Performance Scorecard
-    Create a Markdown table ranking the videos from best to worst. The ranking MUST be based on the KPIs most relevant to a '{funnel_stage}' campaign goal.
-    The table needs three columns: "Rank", "Video Name", and "Ranking Justification".
-    In the "Ranking Justification" column, briefly explain *why* each video earned its rank, referencing its key performance metrics and connecting them to the campaign goal. For example: "Ranked #1 due to its exceptional CTR and low CPC, indicating it was highly effective at driving efficient traffic."
-
-    ### 2. Common Themes in Top Performers
-    Identify 2-3 common creative elements, strategies, or visual styles shared by the top 2-3 performing videos. Explain *why* you believe these themes resonated with the audience for this campaign type.
-
-    ### 3. Actionable Recommendations
-    Provide three clear, specific, and actionable recommendations for the creative team to implement in the next campaign to maximize performance. These should be based directly on the findings from the scorecard and common themes.
-    """
-
-# --- UI FUNCTION to parse and display the report (Unchanged) ---
-def parse_report_and_display(report_text, all_kpis):
-    """Parses the AI's markdown report and displays it in a polished UI."""
-    st.subheader("🏆 Your Strategic Report", anchor=False)
-
-    scorecard_match = re.search(r"### 1\. Campaign Performance Scorecard\s*\n*(.*?)(\n###|$)", report_text, re.DOTALL | re.IGNORECASE)
-    themes_match = re.search(r"### 2\. Common Themes in Top Performers\s*\n*(.*?)(\n###|$)", report_text, re.DOTALL | re.IGNORECASE)
-    recs_match = re.search(r"### 3\. Actionable Recommendations\s*\n*(.*)", report_text, re.DOTALL | re.IGNORECASE)
-
-    if scorecard_match:
-        scorecard_md = scorecard_match.group(1).strip()
-        try:
-            # Convert markdown table to DataFrame
-            # Correctly handle potential empty lines and clean up headers
-            lines = [line.strip() for line in scorecard_md.split('\n') if line.strip() and not line.strip().startswith('---')]
-            header = [h.strip() for h in lines[0].split('|') if h.strip()]
-            data = [dict(zip(header, [d.strip() for d in row.split('|')[1:-1]])) for row in lines[1:]]
-            scorecard_df = pd.DataFrame(data)
-
-            # --- Top Performer Dashboard ---
-            top_video_name = scorecard_df['Video Name'].iloc[0].strip()
-            top_kpis = all_kpis.get(top_video_name, {})
-            st.success(f"**Top Performing Video: {top_video_name}**", icon="🥇")
-            if top_kpis:
-                with st.container(border=True):
-                    cols = st.columns(len(top_kpis) if len(top_kpis) <= 4 else 4)
-                    for i, (k, v) in enumerate(top_kpis.items()):
-                        if i < 4:
-                            cols[i].metric(label=k, value=v)
-            
-            with st.expander("**Campaign Performance Scorecard**", expanded=True):
-                st.dataframe(scorecard_df, use_container_width=True, hide_index=True)
-        except Exception as e:
-            st.error(f"Could not parse the AI's scorecard. Displaying raw text. Error: {e}")
-            st.markdown(scorecard_md)
-
-    if themes_match:
-        with st.expander("**Common Themes in Top Performers**"):
-            st.markdown(themes_match.group(1).strip())
-    if recs_match:
-        with st.expander("**Actionable Recommendations**"):
-            st.markdown(recs_match.group(1).strip())
-
-
-# --- REBUILT State-Based Function with FULLY Dynamic KPIs ---
 def render_campaign_tab(funnel_stage):
     """Main function to render a tab's UI and logic."""
-    
+
     # Initialize session state for the tab
     session_state_key = f"analysis_state_{funnel_stage}"
     if session_state_key not in st.session_state:
@@ -134,7 +22,7 @@ def render_campaign_tab(funnel_stage):
             with col1:
                 uploaded_files = st.file_uploader("Upload campaign videos", type=["mp4", "mov", "avi", "m4v"], accept_multiple_files=True, key=f"uploader_{funnel_stage.lower()}")
             with col2:
-                kpi_csv_file = st.file_uploader("Upload a CSV with your metrics (Optional)", type="csv", key=f"csv_uploader_{funnel_stage.lower()}", help="Must have a 'filename' column. All other columns will be treated as KPIs.")
+                kpi_csv_file = st.file_uploader("Upload a CSV with your metrics (Optional)", type="csv", key=f"csv_uploader_{funnel_stage.lower()}", help="Must have a 'filename' column. The filename can be with or without the extension (e.g., .mp4).")
 
         if uploaded_files:
             parsed_kpis_from_csv = {}
@@ -151,15 +39,14 @@ def render_campaign_tab(funnel_stage):
 
             with st.container(border=True):
                 st.subheader("Step 2: Enter or Verify Metrics", anchor=False)
-                
-                # This will hold the final data from the UI to be sent to the AI
                 kpi_input_data = {}
 
                 for file in uploaded_files:
                     with st.expander(f"Metrics for: **{file.name}**"):
-                        file_kpis_from_csv = parsed_kpis_from_csv.get(file.name)
-                        
-                        # --- Display KPIs from CSV ---
+                        # <-- THE FIX IS HERE: Check for filename with and without extension
+                        basename, _ = os.path.splitext(file.name)
+                        file_kpis_from_csv = parsed_kpis_from_csv.get(file.name) or parsed_kpis_from_csv.get(basename)
+
                         if file_kpis_from_csv:
                             st.markdown("###### Metrics from CSV (editable)")
                             temp_kpis = {}
@@ -168,41 +55,32 @@ def render_campaign_tab(funnel_stage):
                                 with cols[i % 3]:
                                     temp_kpis[k] = st.text_input(f"**{k}**", value=v, key=f"csv_{k}_{file.name}_{funnel_stage}")
                             kpi_input_data[file.name] = temp_kpis
-                        
-                        # --- Interface for Manual KPI Entry ---
-                        else:
+                        else: # --- Manual KPI Entry (unchanged) ---
                             st.info("No metrics found for this file in CSV. Add them manually below.", icon="✍️")
-                            
-                            # Initialize state for this file if not present
                             if file.name not in st.session_state[session_state_key]["manual_kpis"]:
                                 st.session_state[session_state_key]["manual_kpis"][file.name] = []
                             
                             temp_manual_kpis = {}
-                            # Display existing manual KPI fields
                             for i, item in enumerate(st.session_state[session_state_key]["manual_kpis"][file.name]):
-                                c1, c2, c3 = st.columns([2, 2, 1])
+                                c1, c2 = st.columns([2, 2])
                                 with c1:
                                     name = st.text_input("Metric Name", value=item.get("name", ""), key=f"manual_name_{i}_{file.name}_{funnel_stage}")
                                 with c2:
                                     value = st.text_input("Metric Value", value=item.get("value", ""), key=f"manual_value_{i}_{file.name}_{funnel_stage}")
-                                if name and value: # Only add to dict if both fields are filled
-                                    temp_manual_kpis[name] = value
+                                if name and value: temp_manual_kpis[name] = value
                             
                             kpi_input_data[file.name] = temp_manual_kpis
-
-                            # Button to add a new, blank KPI row
                             if st.button("Add Metric", key=f"add_kpi_{file.name}_{funnel_stage}"):
                                 st.session_state[session_state_key]["manual_kpis"][file.name].append({"name": "", "value": ""})
                                 st.rerun()
 
-            # --- Start Analysis Button ---
+            # --- Start Analysis Button (logic is unchanged) ---
             if st.button(f"🚀 Analyze {funnel_stage} Campaign", type="primary", use_container_width=True, key=f"start_button_{funnel_stage.lower()}"):
                 st.session_state[session_state_key]["kpis"] = kpi_input_data
                 files_to_process = [f for f in uploaded_files if any(kpi_input_data.get(f.name, {}).values())]
                 if not files_to_process:
                     st.error("No videos with KPIs found. Please enter metrics to begin analysis.")
                 else:
-                    # ... [The rest of this logic is the same as before] ...
                     with st.spinner("Uploading and starting video processing... The app will NOT freeze."):
                         for file in files_to_process:
                             try:
@@ -217,8 +95,8 @@ def render_campaign_tab(funnel_stage):
                                 st.error(f"Failed to upload '{file.name}': {e}")
                     st.session_state[session_state_key]["status"] = "processing"
                     st.rerun()
-
-    # --- Step 2 & 3: Processing and Report Display (Logic mostly unchanged) ---
+                    
+    # The rest of the function for "processing" and "complete" states remains the same...
     elif st.session_state[session_state_key]["status"] == "processing":
         st.info("🔄 Videos are being processed by Google...", icon="⏳")
         st.write("Click the button below to check the status. Once all videos are ready, the report will be generated.")
@@ -257,10 +135,4 @@ def render_campaign_tab(funnel_stage):
         if st.button(f"↩️ Start New {funnel_stage} Analysis", use_container_width=True, key=f"reset_button_{funnel_stage.lower()}"):
             st.session_state[session_state_key] = {"status": "not_started", "files": [], "kpis": {}, "manual_kpis": {}}
             st.rerun()
-
-# --- Create the Tabs and Render Content ---
-tab1, tab2, tab3 = st.tabs(["**Awareness**", "**Traffic**", "**Conversion**"])
-with tab1: render_campaign_tab("Awareness")
-with tab2: render_campaign_tab("Traffic")
-with tab3: render_campaign_tab("Conversion")
-    
+            
