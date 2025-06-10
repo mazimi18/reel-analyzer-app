@@ -1,83 +1,22 @@
 # ==============================================================================
-# FINAL v3 app.py CODE - This version manually creates the required directory
+# FINAL v5 app.py CODE - Direct Video Upload for Analysis
+# This version completely removes Instaloader and relies on direct user uploads.
 # ==============================================================================
 import os
-import re
-import shutil
 import google.generativeai as genai
 import streamlit as st
-import instaloader
 import time
+import tempfile
 
-# --- Configuration (Unchanged) ---
+# --- Configuration ---
+# We only need the Gemini API key now. All Instagram secrets are removed.
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    INSTA_USER = st.secrets["INSTAGRAM_USER"]
-    INSTA_PASSWORD = st.secrets.get("INSTAGRAM_PASSWORD")
-    INSTA_SESSION_CONTENT = st.secrets.get("INSTA_SESSION_CONTENT")
-except (TypeError, KeyError) as e:
-    st.error(f"🚨 A required secret is missing! Please check your secrets. Error: {e}")
+except (TypeError, KeyError):
+    st.error("🚨 A required GOOGLE_API_KEY secret is missing! Please check your secrets.")
     st.stop()
 
-
-# --- Instagram Downloader Function (DEFINITIVE FIX) ---
-@st.cache_data(show_spinner="Downloading Reel...")
-def download_from_instagram(url):
-    temp_dir = "temp_downloads"
-    if os.path.exists(temp_dir):
-        shutil.rmtree(temp_dir)
-
-    match = re.search(r"/(reels?|p)/([^/]+)", url)
-    if not match:
-        st.error("Invalid Instagram URL. Please use a valid Reel link.")
-        return None
-    shortcode = match.group(2)
-
-    try:
-        L = instaloader.Instaloader(download_videos=True, download_comments=False, save_metadata=False, download_pictures=False)
-        L.stream_log = lambda *args: None
-
-        # --- THIS IS THE CRITICAL LOGIN LOGIC WITH THE DEFINITIVE FIX ---
-        if INSTA_SESSION_CONTENT:
-            # Define the exact directory path instaloader is looking for, based on the error.
-            session_dir = "/tmp/.instaloader-appuser/"
-            
-            # Define the full path to the session file inside that directory.
-            session_filepath = os.path.join(session_dir, f"session-{INSTA_USER}")
-            
-            # THE FIX: Manually create the directory structure. It's okay if it already exists.
-            os.makedirs(session_dir, exist_ok=True)
-            
-            # Write the session content from secrets to the file at the correct location.
-            with open(session_filepath, 'w') as session_file:
-                session_file.write(INSTA_SESSION_CONTENT)
-            
-            # Now, when we load the session, instaloader will find the file in its default path.
-            L.load_session_from_file(INSTA_USER)
-            print("Login successful using session file in manually-created default path.")
-        elif INSTA_PASSWORD:
-            print("Session secret not found, falling back to password login.")
-            L.login(INSTA_USER, INSTA_PASSWORD)
-        else:
-            st.error("No valid Instagram login method found in secrets (session or password).")
-            return None
-        # --- END OF DEFINITIVE FIX ---
-
-        post = instaloader.Post.from_shortcode(L.context, shortcode)
-        L.download_post(post, target=temp_dir)
-
-        for filename in os.listdir(temp_dir):
-            if filename.endswith(".mp4"):
-                return os.path.join(temp_dir, filename)
-        st.error("Could not find the downloaded video file.")
-        return None
-
-    except Exception as e:
-        st.error(f"An error occurred while downloading the Reel: {e}")
-        return None
-
-# --- AI and UI Sections (All unchanged from before) ---
-# ... (The rest of the file is identical) ...
+# --- AI and Helper Functions (Largely Unchanged) ---
 METRIC_DEFINITIONS = {
     "Awareness": {"Impressions": "e.g., 5,000,000", "Cost Per Thousand (CPM)": "e.g., $2.50"},
     "Traffic": {"Click-Through Rate (CTR)": "e.g., 2.5%", "Cost Per Click (CPC)": "e.g., $0.50", "Landing Page Views": "e.g., 25,000", "Cost Per Landing Page View": "e.g., $0.80"},
@@ -85,9 +24,23 @@ METRIC_DEFINITIONS = {
 }
 
 def create_analysis_prompt(funnel_stage, metrics):
+    # This function is unchanged. It creates the detailed prompt for the Gemini API.
     return f"""
-    You are an expert digital marketing and viral video analyst...
-    (The rest of this prompt is identical to previous versions)
+    You are an expert digital marketing and viral video analyst. Your task is to analyze a video and explain how its creative elements contribute to its reported Key Performance Indicators (KPIs) for a specific marketing funnel stage.
+
+    **Funnel Stage & KPIs to Analyze:**
+    - Funnel Stage: {funnel_stage}
+    - Reported Metrics:
+    {metrics}
+
+    **Your Analysis Must Include:**
+    1.  **Opening Hook Analysis:** How did the first 3 seconds grab attention? Did it use a visual surprise, a question, a bold statement, or something else?
+    2.  **Core Content Breakdown:** What techniques did the video use to maintain engagement? (e.g., quick cuts, text overlays, trending audio, storytelling, humor, tutorial style). Explain *why* these techniques work for the target funnel stage.
+    3.  **Call to Action (CTA) Evaluation:** Was there a clear CTA? Was it visual, verbal, or in the caption? How effectively does it drive the desired action for the reported KPIs? (e.g., for a 'Traffic' goal, does it encourage a link click?).
+    4.  **Creative-to-KPI Connection (Most Important):** Explicitly link specific visual or audio elements from the video to the reported metrics. For example: "The high CTR of 2.5% is likely driven by the compelling text overlay at 0:10 that says 'You won't believe this hack,' which creates curiosity and encourages users to click the link in the bio to learn more."
+    5.  **Suggestions for Improvement:** Provide 2-3 actionable recommendations on how the creative could be optimized to improve the reported KPIs even further.
+
+    Structure your response using clear headings and bullet points for readability. Be specific, insightful, and concise.
     """
 
 def analyze_reel(video_path, funnel_stage, metrics, progress_bar):
@@ -108,15 +61,22 @@ def analyze_reel(video_path, funnel_stage, metrics, progress_bar):
     progress_bar.progress(100, text="Done!")
     return response.text
 
+# --- Streamlit UI ---
 st.set_page_config(page_title="Reel KPI Analyzer", layout="wide")
-st.title("🚀 Instagram Reel KPI Analyzer")
-st.markdown("Analyze how a Reel's creative drives specific marketing funnel KPIs.")
+st.title("🚀 Video KPI Analyzer")
+st.markdown("Analyze how a video's creative drives specific marketing funnel KPIs.")
 col1, col2 = st.columns(2)
+
 with col1:
-    st.header("1. Enter Instagram Reel Link")
-    reel_url = st.text_input("Paste the URL of the Instagram Reel here:")
+    st.header("1. Upload Your Video File")
+    # NEW: File uploader instead of URL input
+    uploaded_file = st.file_uploader(
+        "Choose a video file...", 
+        type=["mp4", "mov", "avi", "m4v"]
+    )
+
     st.header("2. Provide Performance Metrics")
-    funnel_stage = st.selectbox("Select the primary goal (funnel stage) of this Reel:", options=list(METRIC_DEFINITIONS.keys()))
+    funnel_stage = st.selectbox("Select the primary goal (funnel stage) of this video:", options=list(METRIC_DEFINITIONS.keys()))
     st.markdown("---")
     kpi_inputs = {}
     if funnel_stage:
@@ -124,27 +84,36 @@ with col1:
         st.subheader(f"{funnel_stage} KPIs:")
         for kpi, placeholder in kpis_for_stage.items():
             kpi_inputs[kpi] = st.text_input(label=kpi, placeholder=placeholder)
-    analyze_button = st.button("Analyze Reel Performance", type="primary", use_container_width=True)
+            
+    analyze_button = st.button("Analyze Video Performance", type="primary", use_container_width=True)
+
 with col2:
     st.header("3. AI-Generated Performance Analysis")
-    if analyze_button and reel_url:
-        video_path = None
-        try:
-            video_path = download_from_instagram(reel_url)
-            if video_path:
-                metrics_text = "\n".join([f"- {kpi}: {val}" for kpi, val in kpi_inputs.items() if val])
-                if not metrics_text:
-                    st.warning("Please enter at least one KPI value.")
-                else:
-                    progress_bar = st.progress(0, text="Starting analysis...")
-                    analysis_result = analyze_reel(video_path, funnel_stage, metrics_text, progress_bar)
-                    st.markdown(analysis_result)
-        except Exception as e:
-            st.error(f"An error occurred during the main process: {e}")
-        finally:
-            if video_path and os.path.exists("temp_downloads"):
-                shutil.rmtree("temp_downloads")
-    elif analyze_button and not reel_url:
-        st.warning("Please enter an Instagram Reel URL first.")
+    
+    # REWIRED: Main logic now checks for an uploaded_file instead of a reel_url
+    if analyze_button and uploaded_file:
+        metrics_text = "\n".join([f"- {kpi}: {val}" for kpi, val in kpi_inputs.items() if val])
+        if not metrics_text:
+            st.warning("Please enter at least one KPI value.")
+        else:
+            try:
+                # Save uploaded file to a temporary file on disk for stable processing
+                with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1]) as tmp_file:
+                    tmp_file.write(uploaded_file.getvalue())
+                    video_path = tmp_file.name
+
+                progress_bar = st.progress(0, text="Starting analysis...")
+                analysis_result = analyze_reel(video_path, funnel_stage, metrics_text, progress_bar)
+                st.markdown(analysis_result)
+
+            except Exception as e:
+                st.error(f"An error occurred during the analysis: {e}")
+            finally:
+                # Clean up the temporary file
+                if 'video_path' in locals() and os.path.exists(video_path):
+                    os.remove(video_path)
+
+    elif analyze_button and not uploaded_file:
+        st.warning("Please upload a video file first.")
     else:
         st.info("Your performance analysis will appear here.")
