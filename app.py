@@ -1,6 +1,14 @@
 # ===================================================================================
-# CORRECTED: render_campaign_tab function
+# FINAL v8.1 app.py - Tab-Based Multi-Video Campaign Strategist
+# CORRECTED AND MORE ROBUST RENDER FUNCTION
 # ===================================================================================
+
+# --- Add this constant near the top of your file ---
+POLLING_INTERVAL_SECONDS = 10 # How often to check the file status
+PROCESSING_TIMEOUT_SECONDS = 300 # Max time to wait for a single file (5 minutes)
+
+
+# --- Replace the entire old render_campaign_tab function with this one ---
 def render_campaign_tab(funnel_stage, kpi_definitions):
     """
     Creates the entire UI and logic for a single tab.
@@ -9,7 +17,6 @@ def render_campaign_tab(funnel_stage, kpi_definitions):
     """
     st.header(f"Analyze Your {funnel_stage} Campaign")
 
-    # Each uploader needs a UNIQUE key to be treated independently by Streamlit
     uploaded_files = st.file_uploader(
         f"Upload all {funnel_stage} campaign videos",
         type=["mp4", "mov", "avi", "m4v"],
@@ -23,13 +30,11 @@ def render_campaign_tab(funnel_stage, kpi_definitions):
 
         for file in uploaded_files:
             with st.expander(f"Metrics for: **{file.name}**"):
-                # Dynamically create input fields based on the tab's kpi_definitions
                 kpi_input_data[file.name] = {
                     kpi: st.text_input(kpi, placeholder=placeholder, key=f"{kpi}_{file.name}_{funnel_stage}")
                     for kpi, placeholder in kpi_definitions.items()
                 }
 
-        # Each button also needs a UNIQUE key
         analyze_button = st.button(f"🚀 Analyze {funnel_stage} Campaign", type="primary", key=f"button_{funnel_stage.lower()}")
 
         if analyze_button:
@@ -46,7 +51,6 @@ def render_campaign_tab(funnel_stage, kpi_definitions):
                 total_videos = len(campaign_videos)
                 progress_bar = st.progress(0, text="Starting campaign analysis...")
 
-                # Step 1: Micro-Analysis Loop
                 for i, video_data in enumerate(campaign_videos):
                     file = video_data["file_object"]
                     kpi_text = ", ".join([f"{k}: {v}" for k, v in video_data["kpis"].items()])
@@ -56,29 +60,37 @@ def render_campaign_tab(funnel_stage, kpi_definitions):
                     video_path = None
                     video_file_for_api = None
                     try:
-                        # 1. Save video to a temporary file
                         with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.name)[1]) as tmp_file:
                             tmp_file.write(file.getvalue())
                             video_path = tmp_file.name
 
-                        # 2. Upload the file to the API
                         st.info(f"⬆️ Uploading '{file.name}' to Google...")
                         video_file_for_api = genai.upload_file(path=video_path)
-                        st.info(f"⏳ Processing '{file.name}'... This may take a moment.")
+                        st.info(f"⏳ Processing '{file.name}'... This may take a few minutes.")
 
-                        # 3. *** NEW: Poll for ACTIVE state ***
-                        while video_file_for_api.state.name == "PROCESSING":
-                            time.sleep(5)  # Wait for 5 seconds before checking again
+                        # *** ROBUST POLLING WITH TIMEOUT ***
+                        start_time = time.time()
+                        while True:
+                            # Check for timeout
+                            if time.time() - start_time > PROCESSING_TIMEOUT_SECONDS:
+                                raise TimeoutError(f"File processing for '{file.name}' timed out after {PROCESSING_TIMEOUT_SECONDS} seconds.")
+
+                            # Get the latest file status
                             video_file_for_api = genai.get_file(name=video_file_for_api.name)
+                            
+                            # If it's done processing, break the loop
+                            if video_file_for_api.state.name != "PROCESSING":
+                                break
+                            
+                            # Otherwise, wait before checking again
+                            time.sleep(POLLING_INTERVAL_SECONDS)
 
-                        # Check if processing failed
                         if video_file_for_api.state.name != "ACTIVE":
-                            st.error(f"Processing failed for '{file.name}'. State: {video_file_for_api.state.name}")
+                            st.error(f"Processing failed for '{file.name}'. Final state: {video_file_for_api.state.name}")
                             individual_summaries.append(f"**Video: {file.name}**\nAnalysis failed due to file processing error.\n\n")
-                            continue # Skip to the next video
+                            continue
 
-                        # 4. File is ACTIVE, now we can generate content
-                        st.info(f"✅ '{file.name}' is ready! Generating insights...")
+                        st.success(f"✅ '{file.name}' is ready! Generating insights...")
                         model = genai.GenerativeModel(model_name="gemini-1.5-flash-latest")
                         prompt = create_individual_analysis_prompt(file.name, kpi_text)
                         response = model.generate_content([prompt, video_file_for_api])
@@ -91,13 +103,18 @@ def render_campaign_tab(funnel_stage, kpi_definitions):
                         individual_summaries.append(f"**Video: {file.name}**\nAnalysis failed.\n\n")
 
                     finally:
-                        # 5. Clean up files regardless of success or failure
+                        # This cleanup runs no matter what happens in the try block
                         if video_path and os.path.exists(video_path):
                             os.remove(video_path)
                         if video_file_for_api:
-                            genai.delete_file(video_file_for_api.name)
+                            # We check if the object exists before trying to delete
+                            try:
+                                genai.delete_file(video_file_for_api.name)
+                            except Exception as e:
+                                st.warning(f"Could not delete file '{video_file_for_api.name}' from Google Cloud. You may need to delete it manually. Error: {e}")
 
-                # Step 2: Macro-Synthesis (Unchanged)
+
+                # Step 2: Macro-Synthesis
                 if individual_summaries:
                     progress_bar.progress(0.9, text="Synthesizing campaign-level insights...")
                     all_summaries_text = "".join(individual_summaries)
