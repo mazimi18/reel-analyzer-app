@@ -1,12 +1,12 @@
 # ===================================================================================
-# FINAL v17.0 app.py - The Robust "YouTube" Experience
-# This version uses JSON for robust data parsing, fixes all known bugs,
-# and significantly enhances the UI to more closely resemble YouTube.
+# FINAL v18.0 app.py - Strategic Scaling Logic & Video Previews
+# This version enhances the AI's core logic to understand the value of "scaling"
+# and re-introduces video previews for a better user experience.
 # ===================================================================================
 import os
 import io
 import re
-import json # <-- Import JSON for robust parsing
+import json
 import google.generativeai as genai
 import streamlit as st
 import pandas as pd
@@ -20,65 +20,23 @@ st.set_page_config(
     layout="wide"
 )
 
-# Custom CSS to mimic YouTube's dark theme more accurately
+# Custom CSS for YouTube dark theme
 def apply_youtube_style():
     st.markdown("""
         <style>
             @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
-            
-            /* Main App Background */
-            html, body, [class*="st-"] {
-                font-family: 'Roboto', sans-serif;
-            }
-            .stApp {
-                background-color: #0f0f0f;
-                color: #f1f1f1;
-            }
-            /* Headers */
-            h1, h2, h3 {
-                color: #ffffff !important;
-            }
-            h1 { font-weight: 700; }
-            h3 { font-weight: 500; }
-            /* Containers & Cards */
+            html, body, [class*="st-"] { font-family: 'Roboto', sans-serif; }
+            .stApp { background-color: #0f0f0f; color: #f1f1f1; }
+            h1, h2, h3 { color: #ffffff !important; }
             .st-emotion-cache-1r6slb0, .st-emotion-cache-1bp2ih8 {
-                background-color: #181818;
-                border: 1px solid #383838;
-                border-radius: 12px;
-                padding: 1rem;
+                background-color: #181818; border: 1px solid #383838; border-radius: 12px; padding: 1rem;
             }
-            /* Buttons */
             .stButton > button {
-                background-color: #c00;
-                color: white;
-                border-radius: 18px;
-                border: 1px solid #c00;
-                padding: 8px 16px;
-                font-weight: 500;
+                background-color: #c00; color: white; border-radius: 18px; border: 1px solid #c00;
+                padding: 8px 16px; font-weight: 500;
             }
-            .stButton > button:hover {
-                background-color: #990000;
-                border-color: #990000;
-                color: white;
-            }
-            /* Tabs */
-            .st-emotion-cache-1gulkj5 button {
-                border-radius: 8px;
-                color: #f1f1f1;
-            }
-            .st-emotion-cache-1gulkj5 button[aria-selected="true"] {
-                background-color: #ffffff;
-                color: #0f0f0f;
-            }
-            /* Sidebar/Chat Area */
-            [data-testid="stSidebar"] {
-                background-color: #181818;
-                padding: 1rem;
-            }
-            /* Dataframe styling */
-            .stDataFrame {
-                background-color: #181818;
-            }
+            .stButton > button:hover { background-color: #990000; border-color: #990000; color: white; }
+            .st-emotion-cache-1gulkj5 button[aria-selected="true"] { background-color: #ffffff; color: #0f0f0f; }
         </style>
     """, unsafe_allow_html=True)
 
@@ -95,7 +53,7 @@ except (TypeError, KeyError):
     st.error("🚨 A required GOOGLE_API_KEY secret is missing!", icon="❗")
     st.stop()
 
-# --- AI PROMPT ENGINEERING 4.0 (JSON for Data) ---
+# --- AI PROMPT ENGINEERING 5.0 (Scaling Logic) ---
 def create_comprehensive_analysis_prompt(all_kpi_data, funnel_stage):
     priority_metrics = {
         "Awareness": "impressions, high Video View Rate, and low CPM",
@@ -108,7 +66,15 @@ def create_comprehensive_analysis_prompt(all_kpi_data, funnel_stage):
         video_data_string += f"- **Video File:** `{filename}`\n  - **Performance Metrics:** {kpi_string}\n\n"
 
     return f"""
-    You are a world-class digital marketing and creative strategist. I have provided you with video files and their performance metrics for a '{funnel_stage}' campaign. Your primary goal is to provide a deep, actionable analysis. For this '{funnel_stage}' campaign, prioritize results that show **{priority_metrics.get(funnel_stage, "strong overall performance")}**.
+    You are a world-class digital marketing and creative strategist. Your analysis must be nuanced and reflect real-world performance marketing principles.
+
+    **Primary Goal:** Analyze the provided video files and performance metrics for a '{funnel_stage}' campaign to identify winning creative strategies.
+
+    **Nuanced Performance Analysis (VERY IMPORTANT):**
+    You must understand the concept of **"scaling."** A video that achieves a high spend and high volume of desired actions (like clicks or purchases) has proven its ability to scale.
+    - **Do not automatically penalize a video for a slightly higher efficiency metric (like CPC or CPA) if it has significantly higher spend and volume.**
+    - For example, a video with $5,000 spend and a $1.50 CPC is often **more valuable** than a video with $50 spend and a $1.00 CPC, because the former has proven it works with a large budget.
+    - Mention this "ability to scale" in your ranking justification when relevant.
 
     **Campaign Data:**
     ---
@@ -116,17 +82,18 @@ def create_comprehensive_analysis_prompt(all_kpi_data, funnel_stage):
     ---
 
     **Your Comprehensive Task:**
-    Analyze every video file and its data. Generate a final strategic report with FIVE sections.
+    Generate a final strategic report with FIVE sections.
 
-    **IMPORTANT INSTRUCTION:** For the first section, "Campaign Performance Scorecard", you MUST provide the output as a single, valid JSON array of objects. Each object should have three keys: "rank" (integer), "video_name" (string), and "justification" (string). Enclose the entire JSON block in ```json ... ```.
+    **IMPORTANT FORMATTING INSTRUCTION:**
+    For Section 1, "Campaign Performance Scorecard," you MUST provide the output as a single, valid JSON array of objects. Each object needs three keys: "rank" (integer), "video_name" (string), and "justification" (string). Enclose the entire JSON block in ```json ... ```.
 
-    For all other sections, use standard H3 markdown headers (e.g., ### Section Name).
+    For all other sections, use standard H3 markdown headers (e.g., ### 2. Section Name).
 
-    **SECTION 1: CAMPAIGN PERFORMANCE SCORECARD (JSON aRRAY)**
+    **SECTION 1: CAMPAIGN PERFORMANCE SCORECARD (JSON ARRAY)**
     ```json
     [
       {{"rank": 1, "video_name": "example_video_1.mp4", "justification": "This video ranked first due to its outstanding ROAS of 7.2, directly aligning with the conversion goal. The clear product shot in the first 3 seconds likely drove this performance."}},
-      {{"rank": 2, "video_name": "example_video_2.mp4", "justification": "Ranked second with a solid ROAS of 4.5. The user-generated content style was effective, but the call-to-action was less prominent than the top performer."}}
+      {{"rank": 2, "video_name": "example_video_2.mp4", "justification": "While having a slightly higher CPA, this ad proved its ability to scale by handling over $5,000 in spend while maintaining a strong 4.5 ROAS. This makes it a highly valuable creative."}}
     ]
     ```
 
@@ -137,10 +104,10 @@ def create_comprehensive_analysis_prompt(all_kpi_data, funnel_stage):
     (Your analysis here...)
 
     ### 4. New Creative Ideas (Ad Scripts)
-    Write TWO new, short video ad scripts (15-20 seconds each). Format them clearly with 'Scene' and 'VO' (Voiceover) or 'Text on Screen' instructions. Title them "Concept A" and "Concept B".
+    (Your analysis here...)
 
     ### 5. Suggested Ad Copy
-    Write three variations of ad copy (headline and body text) that could be used with the new creative ideas. Label them "Copy Variation 1", "Copy Variation 2", and "Copy Variation 3".
+    (Your analysis here...)
     """
 
 def create_chatbot_prompt(report_text):
@@ -153,11 +120,9 @@ def create_chatbot_prompt(report_text):
 
 # --- UI HELPER FUNCTIONS ---
 def parse_report_and_display(report_text, all_kpis):
+    # This robust JSON-based parser is unchanged
     st.subheader("🏆 Strategic Campaign Report", anchor=False)
-
-    # --- Robust JSON Parsing for Scorecard ---
     try:
-        # Use regex to find the JSON block
         json_match = re.search(r"```json\s*\n([\s\S]*?)\n```", report_text)
         if json_match:
             json_string = json_match.group(1)
@@ -179,15 +144,12 @@ def parse_report_and_display(report_text, all_kpis):
                 st.dataframe(scorecard_df, use_container_width=True, hide_index=True)
         else:
             raise ValueError("No JSON block found for the scorecard.")
-
-    except (ValueError, json.JSONDecodeError, IndexError) as e:
+    except Exception as e:
         st.error(f"Could not parse top performer data or scorecard. Error: {e}", icon="🚨")
-        # Fallback to show the raw scorecard text if parsing fails
         scorecard_raw_match = re.search(r"### 1\..*Scorecard\s*\n*(.*?)(\n###|$)", report_text, re.DOTALL | re.IGNORECASE)
         if scorecard_raw_match:
             st.text(scorecard_raw_match.group(1).strip())
 
-    # --- Markdown Parsing for other sections ---
     report_sections = re.findall(r"### (2|3|4|5)\. (.*?)\n(.*?)(?=\n### |\Z)", report_text, re.DOTALL)
     for num, title, content in report_sections:
         with st.expander(f"**{num}. {title.strip()}**"):
@@ -197,12 +159,11 @@ def parse_report_and_display(report_text, all_kpis):
 def render_campaign_tab(funnel_stage):
     session_state_key = f"analysis_state_{funnel_stage}"
     if session_state_key not in st.session_state:
-        # THE KEYERROR FIX: Initialize chat_messages here
         st.session_state[session_state_key] = {
             "status": "not_started", "files": [], "kpis": {}, "manual_kpis": {}, "chat_messages": []
         }
     
-    # ... The "not_started" and "processing" states are unchanged and robust ...
+    # State 1: Upload
     if st.session_state[session_state_key]["status"] == "not_started":
         with st.container(border=True):
             st.subheader("Step 1: Upload Assets", anchor=False)
@@ -217,11 +178,16 @@ def render_campaign_tab(funnel_stage):
                     if 'filename' not in df.columns: st.error("CSV Error: Missing 'filename' column.", icon="❌")
                     else: parsed_kpis_from_csv = df.set_index('filename').to_dict('index'); st.success("✅ Metrics CSV loaded!", icon="🎉")
                 except Exception as e: st.error(f"Error reading CSV file: {e}", icon="❌")
+            
             with st.container(border=True):
-                st.subheader("Step 2: Verify Metrics", anchor=False)
+                st.subheader("Step 2: Verify Metrics & Preview Videos", anchor=False)
                 kpi_input_data = {}
                 for file in uploaded_files:
                     with st.expander(f"Metrics for: **{file.name}**"):
+                        # --- NEW: VIDEO PREVIEW PANE ---
+                        st.video(file)
+                        st.markdown("---") # Visual separator
+                        
                         basename, _ = os.path.splitext(file.name)
                         file_kpis_from_csv = parsed_kpis_from_csv.get(file.name) or parsed_kpis_from_csv.get(basename)
                         if file_kpis_from_csv:
@@ -231,6 +197,7 @@ def render_campaign_tab(funnel_stage):
                                 with cols[i % 3]: temp_kpis[k] = st.text_input(f"**{k}**", value=v, key=f"csv_{k}_{file.name}_{funnel_stage}")
                             kpi_input_data[file.name] = temp_kpis
                         else:
+                            # ... manual entry logic is unchanged ...
                             st.info("No CSV data for this file. Add metrics manually.", icon="✍️")
                             if file.name not in st.session_state[session_state_key]["manual_kpis"]:
                                 st.session_state[session_state_key]["manual_kpis"][file.name] = []
@@ -243,7 +210,9 @@ def render_campaign_tab(funnel_stage):
                             kpi_input_data[file.name] = temp_manual_kpis
                             if st.button("Add Metric", key=f"add_kpi_{file.name}_{funnel_stage}"):
                                 st.session_state[session_state_key]["manual_kpis"][file.name].append({"name": "", "value": ""}); st.rerun()
+
             if st.button(f"🚀 Analyze {funnel_stage} Campaign", type="primary", use_container_width=True, key=f"start_button_{funnel_stage.lower()}"):
+                # ... This logic is unchanged and robust for paid tier ...
                 st.session_state[session_state_key]["kpis"] = kpi_input_data
                 files_to_process = [f for f in uploaded_files if any(kpi_input_data.get(f.name, {}).values())]
                 if not files_to_process:
@@ -259,7 +228,10 @@ def render_campaign_tab(funnel_stage):
                                 os.remove(tmp.name)
                             except Exception as e: st.error(f"Failed to upload '{file.name}': {e}")
                     st.session_state[session_state_key]["status"] = "processing"; st.rerun()
+
+    # State 2: Processing
     elif st.session_state[session_state_key]["status"] == "processing":
+        # ... This logic is unchanged and robust for paid tier ...
         st.info("🔄 Videos are being processed... Click below when ready.", icon="⏳")
         if st.button("Check Status & Generate Report", use_container_width=True, key=f"check_button_{funnel_stage.lower()}"):
             all_files_ready = True
@@ -290,6 +262,8 @@ def render_campaign_tab(funnel_stage):
                     except Exception as e:
                         st.error(f"An error occurred during analysis: {e}")
                         st.session_state[session_state_key]["status"] = "processing"
+
+    # State 3: Complete (Report & Chatbot)
     elif st.session_state[session_state_key]["status"] == "complete":
         main_col, chat_col = st.columns([2, 1])
         with main_col:
@@ -300,7 +274,7 @@ def render_campaign_tab(funnel_stage):
                 for message in st.session_state[session_state_key]["chat_messages"]:
                     with st.chat_message(message["role"]):
                         st.markdown(message["content"])
-                if prompt := st.chat_input("E.g., 'Summarize the top recommendation'"):
+                if prompt := st.chat_input("E.g., 'Which video had the best CTR?'"):
                     st.session_state[session_state_key]["chat_messages"].append({"role": "user", "content": prompt})
                     with st.chat_message("user"): st.markdown(prompt)
                     with st.chat_message("assistant"):
@@ -323,3 +297,4 @@ tab1, tab2, tab3 = st.tabs(["**Awareness**", "**Traffic**", "**Conversion**"])
 with tab1: render_campaign_tab("Awareness")
 with tab2: render_campaign_tab("Traffic")
 with tab3: render_campaign_tab("Conversion")
+    
