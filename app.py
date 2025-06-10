@@ -1,5 +1,6 @@
 # ===================================================================================
-# FINAL v6.3 app.py - Model changed to Gemini 1.5 Flash to avoid rate limits
+# FINAL v7.1 app.py - Multi-Video Campaign Strategist (Multi-upload verified)
+# This version ensures the file uploader is correctly configured for multiple files.
 # ===================================================================================
 import os
 import google.generativeai as genai
@@ -9,8 +10,8 @@ import tempfile
 
 # --- Configuration and Page Setup ---
 st.set_page_config(
-    page_title="AI Video Analyst",
-    page_icon="🤖",
+    page_title="AI Campaign Strategist",
+    page_icon="🏆",
     layout="wide"
 )
 
@@ -21,156 +22,120 @@ except (TypeError, KeyError):
     st.error("🚨 A required GOOGLE_API_KEY secret is missing! Please check your secrets.")
     st.stop()
 
-# --- Session State Initialization ---
-if "chat" not in st.session_state:
-    st.session_state.chat = None
-if "analysis_complete" not in st.session_state:
-    st.session_state.analysis_complete = False
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "video_file_name" not in st.session_state:
-    st.session_state.video_file_name = None
-
-# --- AI and Helper Functions ---
-METRIC_DEFINITIONS = {
-    "Awareness": {"Impressions": "e.g., 5,000,000", "Cost Per Thousand (CPM)": "e.g., $2.50"},
-    "Traffic": {"Click-Through Rate (CTR)": "e.g., 2.5%", "Cost Per Click (CPC)": "e.g., $0.50"},
-    "Conversion": {"Purchases / Leads": "e.g., 500", "Return On Ad Spend (ROAS)": "e.g., 4.5x"}
-}
-
-def create_initial_prompt(funnel_stage, metrics, deeper_analysis_options):
-    prompt = f"""
-    You are an expert digital marketing and viral video analyst. Your task is to analyze a video and explain how its creative elements contribute to its reported Key Performance Indicators (KPIs).
-
-    **Funnel Stage & KPIs to Analyze:**
-    - Funnel Stage: {funnel_stage}
-    - Reported Metrics: {metrics}
-
-    **Your Analysis Must Include:**
-    1.  **Opening Hook Analysis:** (First 3 seconds) How did it grab attention?
-    2.  **Core Content Breakdown:** What techniques maintained engagement (e.g., quick cuts, text overlays, audio)?
-    3.  **Call to Action (CTA) Evaluation:** Was the CTA clear and effective for the funnel stage?
-    4.  **Creative-to-KPI Connection (Most Important):** Explicitly link creative elements to the reported metrics.
-    5.  **Suggestions for Improvement:** Provide 2-3 actionable recommendations to improve the KPIs.
+# --- AI Prompt Engineering ---
+def create_individual_analysis_prompt(filename, kpi_data):
+    """Creates a prompt for a CONCISE analysis of a SINGLE video."""
+    return f"""
+    Analyze the creative of the video '{filename}'.
+    
+    **Reported KPIs:**
+    {kpi_data}
+    
+    **Your Task:**
+    Provide a brief, one-paragraph summary (under 80 words). Identify the single most impactful creative element that likely drove these results and explain why. Focus on actionable insights.
     """
 
-    if "hooks" in deeper_analysis_options:
-        prompt += "\n\n**6. Alternative Hooks:** Suggest 3 new, creative opening hooks for this video, explaining the strategy behind each."
-    if "audience" in deeper_analysis_options:
-        prompt += "\n\n**7. Target Audience Persona:** Based on the video's content and style, describe a detailed persona of the ideal target viewer (e.g., age, interests, pain points)."
+def create_campaign_synthesis_prompt(all_individual_summaries):
+    """Creates the master prompt to analyze the entire campaign based on individual summaries."""
+    return f"""
+    You are a world-class digital marketing campaign strategist. I have provided you with concise summaries of every video in a recent campaign, including their performance drivers.
 
-    prompt += "\n\nStructure your entire response using clear headings and markdown for readability."
-    return prompt
+    **Individual Video Summaries:**
+    ---
+    {all_individual_summaries}
+    ---
 
-def main_analysis_and_chat_setup(video_path, funnel_stage, metrics, deeper_analysis_options, progress_bar):
-    progress_bar.progress(10, text="Uploading video file to AI...")
-    video_file = genai.upload_file(path=video_path)
+    **Your Task:**
+    Analyze the entire campaign based *only* on the summaries provided. Produce a strategic report with the following three sections, using clear markdown headings:
+
+    ### 1. Campaign Performance Scorecard
+    Create a simple table that ranks the videos from best to worst performing based on their summaries. Include the video name and a "Key Takeaway" for each.
+
+    ### 2. Common Themes in Top Performers
+    Identify 2-3 common creative elements, patterns, or strategies that the top-performing videos shared. For each theme, explain *why* you believe it resonated with the audience. This is the most important section.
+
+    ### 3. Actionable Recommendations
+    Based on your analysis, provide three clear, actionable recommendations for the next campaign to maximize performance.
+    """
+
+# --- Main App Logic ---
+st.title("🏆 AI Campaign Strategist")
+st.markdown("Upload all the videos from a campaign, add their KPIs, and discover the creative themes that drive success.")
+
+if 'campaign_videos' not in st.session_state:
+    st.session_state.campaign_videos = []
+
+# --- UI for File Upload and Metric Input ---
+# THE FIX IS HERE: 'accept_multiple_files=True' is included.
+uploaded_files = st.file_uploader(
+    "1. Upload all campaign videos (.mp4, .mov)",
+    type=["mp4", "mov", "avi", "m4v"],
+    accept_multiple_files=True
+)
+
+if uploaded_files:
+    kpi_input_data = {}
+    st.subheader("2. Enter KPIs for Each Video")
+
+    for file in uploaded_files:
+        with st.expander(f"Metrics for: **{file.name}**"):
+            ctr = st.text_input("CTR (%)", key=f"ctr_{file.name}")
+            cpc = st.text_input("CPC ($)", key=f"cpc_{file.name}")
+            roas = st.text_input("ROAS (x)", key=f"roas_{file.name}")
+            kpi_input_data[file.name] = {"CTR": ctr, "CPC": cpc, "ROAS": roas}
     
-    progress_bar.progress(30, text="File uploaded. Waiting for processing...")
-    while video_file.state.name == "PROCESSING":
-        time.sleep(2)
-        video_file = genai.get_file(video_file.name)
-    if video_file.state.name == "FAILED":
-        raise ValueError("Video processing failed.")
-    
-    st.session_state.video_file_name = video_file.name
-    
-    progress_bar.progress(60, text="Video processed. Generating initial analysis...")
-    
-    # [THE FIX IS HERE] Using the more generous 'flash' model instead of 'pro'.
-    model = genai.GenerativeModel(model_name="gemini-1.5-flash-latest")
-    
-    st.session_state.chat = model.start_chat(history=[
-        {"role": "user", "parts": [video_file, "Analyze this video based on my next instructions."]},
-        {"role": "model", "parts": ["I have received the video. I am ready for your analysis instructions."]}
-    ])
+    analyze_button = st.button("🚀 Analyze Entire Campaign", type="primary", use_container_width=True)
 
-    initial_prompt = create_initial_prompt(funnel_stage, metrics, deeper_analysis_options)
-    response = st.session_state.chat.send_message(initial_prompt)
-    
-    progress_bar.progress(100, text="Analysis complete!")
-    return response.text
+    if analyze_button:
+        st.session_state.campaign_videos = []
+        for file in uploaded_files:
+            kpis = {k: v for k, v in kpi_input_data[file.name].items() if v}
+            if not kpis:
+                st.warning(f"Skipping '{file.name}' as no KPIs were provided.")
+                continue
+            st.session_state.campaign_videos.append({"file_object": file, "kpis": kpis})
 
-# --- Streamlit UI ---
-st.title("🤖 AI Video Strategist")
-st.markdown("Upload a video, provide its KPIs, and get a deep strategic analysis followed by a Q&A session with an AI expert.")
+        # --- Two-Step AI Analysis Execution ---
+        if st.session_state.campaign_videos:
+            individual_summaries = []
+            total_videos = len(st.session_state.campaign_videos)
+            progress_bar = st.progress(0, text="Starting campaign analysis...")
 
-col1, col2 = st.columns([0.4, 0.6])
-
-with col1:
-    st.header("1. Upload & Configure")
-
-    uploaded_file = st.file_uploader(
-        "Upload your video file",
-        type=["mp4", "mov", "avi", "m4v"]
-    )
-    
-    if uploaded_file:
-        st.video(uploaded_file)
-
-    with st.expander("📈 Enter Performance KPIs", expanded=True):
-        funnel_stage = st.selectbox("Primary Goal (Funnel Stage):", options=list(METRIC_DEFINITIONS.keys()))
-        kpi_inputs = {}
-        if funnel_stage:
-            for kpi, placeholder in METRIC_DEFINITIONS[funnel_stage].items():
-                kpi_inputs[kpi] = st.text_input(label=kpi, placeholder=placeholder)
-
-    with st.expander("🧠 Add Deeper Analysis", expanded=False):
-        deeper_analysis_options = st.multiselect(
-            "Select additional analysis points:",
-            options={
-                "hooks": "Suggest Alternative Hooks",
-                "audience": "Define Target Audience Persona"
-            },
-            format_func=lambda x: {
-                "hooks": "Suggest Alternative Hooks",
-                "audience": "Define Target Audience Persona"
-            }.get(x)
-        )
-
-    analyze_button = st.button("✨ Analyze Video", type="primary", use_container_width=True)
-
-with col2:
-    st.header("2. AI Analysis & Chat")
-
-    if analyze_button and uploaded_file:
-        metrics_text = "\n".join([f"- {kpi}: {val}" for kpi, val in kpi_inputs.items() if val])
-        if not metrics_text:
-            st.warning("Please enter at least one KPI value for a meaningful analysis.")
-        else:
-            try:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1]) as tmp_file:
-                    tmp_file.write(uploaded_file.getvalue())
-                    video_path = tmp_file.name
+            for i, video_data in enumerate(st.session_state.campaign_videos):
+                file = video_data["file_object"]
+                kpi_text = "\n".join([f"- {k}: {v}" for k, v in video_data["kpis"].items()])
+                progress_text = f"Analyzing video {i+1}/{total_videos}: {file.name}"
+                progress_bar.progress((i / total_videos), text=progress_text)
                 
-                progress_bar = st.progress(0, text="Starting...")
-                initial_analysis = main_analysis_and_chat_setup(video_path, funnel_stage, metrics_text, deeper_analysis_options, progress_bar)
+                try:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.name)[1]) as tmp_file:
+                        tmp_file.write(file.getvalue())
+                        video_path = tmp_file.name
+                    
+                    model = genai.GenerativeModel(model_name="gemini-1.5-flash-latest")
+                    prompt = create_individual_analysis_prompt(file.name, kpi_text)
+                    video_file_for_api = genai.upload_file(path=video_path)
+                    response = model.generate_content([prompt, video_file_for_api])
+                    
+                    summary = f"**Video: {file.name}**\n{response.text}\n\n"
+                    individual_summaries.append(summary)
+                    
+                    os.remove(video_path)
+                    genai.delete_file(video_file_for_api.name)
+                except Exception as e:
+                    st.error(f"Error analyzing '{file.name}': {e}")
+                    individual_summaries.append(f"**Video: {file.name}**\nAnalysis failed.\n\n")
+
+            if individual_summaries:
+                progress_bar.progress(0.9, text="Synthesizing campaign-level insights...")
+                all_summaries_text = "".join(individual_summaries)
+                model = genai.GenerativeModel(model_name="gemini-1.5-flash-latest")
+                synthesis_prompt = create_campaign_synthesis_prompt(all_summaries_text)
+                final_response = model.generate_content(synthesis_prompt)
                 
-                st.session_state.analysis_complete = True
-                st.session_state.messages.append({"role": "assistant", "content": initial_analysis})
-                
-                os.remove(video_path)
-                st.rerun()
-
-            except Exception as e:
-                st.error(f"An error occurred: {e}")
-
-    if st.session_state.analysis_complete:
-        for message in st.session_state.messages:
-            with st.chat_message(name=message["role"]):
-                st.markdown(message["content"])
-
-    if prompt := st.chat_input("Ask a follow-up question...", disabled=not st.session_state.analysis_complete):
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
-        with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
-                response = st.session_state.chat.send_message(prompt)
-                st.markdown(response.text)
-        
-        st.session_state.messages.append({"role": "assistant", "content": response.text})
-
-    elif not st.session_state.analysis_complete:
-        st.info("Your analysis and chat will appear here after you upload a video and click 'Analyze'.")
+                progress_bar.progress(1.0, text="Campaign analysis complete!")
+                st.subheader("🏆 Your Campaign Strategy Report")
+                st.markdown(final_response.text)
+            else:
+                st.error("No videos were analyzed. Please check your inputs.")
+                progress_bar.empty()
