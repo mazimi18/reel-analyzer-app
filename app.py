@@ -1,7 +1,7 @@
 # ===================================================================================
-# FINAL v12.1 app.py - Corrected NameError Import
-# This version fixes the "name 'google' is not defined" error by correctly
-# importing the ResourceExhausted exception class.
+# FINAL v13.0 app.py - The Conversational Analysis Architecture
+# This definitive version uses a chat session to analyze videos one by one,
+# building context over time and staying within all free tier limits.
 # ===================================================================================
 import os
 import io
@@ -11,10 +11,9 @@ import streamlit as st
 import pandas as pd
 import tempfile
 import time
-from google.api_core.exceptions import ResourceExhausted # <--- THE CRITICAL FIX IS HERE
 
 # --- CONFIGURATION CONSTANT ---
-DELAY_BETWEEN_REQUESTS_SECONDS = 20
+DELAY_BETWEEN_REQUESTS_SECONDS = 30 # A very safe delay for free tier
 
 # --- Configuration and Page Setup ---
 st.set_page_config(
@@ -33,53 +32,33 @@ except (TypeError, KeyError):
     st.error("🚨 A required GOOGLE_API_KEY secret is missing! Please check your secrets.", icon="❗")
     st.stop()
 
-# --- ROBUST API CALLER WITH RETRY LOGIC (for the final call) ---
-def generate_with_retry(model, prompt, retries=3, base_delay=25):
-    num_attempts = 0
-    while num_attempts < retries:
-        try:
-            response = model.generate_content(prompt)
-            return response
-        except ResourceExhausted as e: # <--- AND THE FIX IS USED HERE
-            num_attempts += 1
-            if num_attempts < retries:
-                st.warning(f"Final analysis API limit hit. Retrying in {base_delay}s... (Attempt {num_attempts}/{retries})", icon="⏳")
-                time.sleep(base_delay)
-                base_delay *= 2
-            else:
-                st.error(f"Final analysis failed after {retries} retries. The API is too busy. Please wait and try again.")
-                raise e
-        except Exception as e:
-            st.error(f"An unexpected error occurred during the final analysis: {e}")
-            raise e
-
-# --- AI PROMPT ENGINEERING (Unchanged) ---
-def create_individual_analysis_prompt(filename, kpi_data):
-    return f"Analyze the creative of the video named '{filename}'. The video's performance metrics are: {kpi_data}. Your Task: Provide a brief, one-paragraph summary (under 80 words). Focus on the visual and narrative elements. Identify the single most impactful creative element that likely drove these results and explain why. Be direct and concise."
-
-def create_campaign_synthesis_prompt(all_individual_summaries, funnel_stage):
+# --- AI PROMPT ENGINEERING (Adjusted for Conversational Flow) ---
+def create_initial_prompt(funnel_stage):
     priority_metrics = {
         "Awareness": "impressions, high Video View Rate, and low CPM",
         "Traffic": "high Click-Through Rate (CTR) and low Cost Per Click (CPC)",
         "Conversion": "high Return On Ad Spend (ROAS), high number of Purchases/Leads, and low Cost Per Acquisition (CPA)"
     }
-    return f"""You are a world-class digital marketing campaign strategist analyzing a '{funnel_stage}' campaign. Your primary goal is to identify winning creative strategies based on performance data. For this '{funnel_stage}' campaign, you should prioritize results that show **{priority_metrics.get(funnel_stage, "strong overall performance")}**. I have provided you with concise summaries of every video in the campaign.
-    **Individual Video Summaries:**
-    ---
-    {all_individual_summaries}
-    ---
-    **Your Task:**
-    Produce a strategic report with these three sections, using H3 markdown headers (e.g., ### Section Name):
-    ### 1. Campaign Performance Scorecard
-    Create a Markdown table ranking the videos from best to worst. The ranking MUST be based on the KPIs most relevant to a '{funnel_stage}' campaign goal. The table needs three columns: "Rank", "Video Name", and "Ranking Justification". In the "Ranking Justification" column, briefly explain *why* each video earned its rank, referencing its key performance metrics and connecting them to the campaign goal.
-    ### 2. Common Themes in Top Performers
-    Identify 2-3 common creative elements, strategies, or visual styles shared by the top 2-3 performing videos. Explain *why* you believe these themes resonated with the audience for this campaign type.
-    ### 3. Actionable Recommendations
-    Provide three clear, specific, and actionable recommendations for the creative team to implement in the next campaign to maximize performance.
-    """
+    return f"""You are a world-class digital marketing campaign strategist. We are about to analyze a '{funnel_stage}' campaign. Your goal is to identify winning creative strategies based on performance data, prioritizing **{priority_metrics.get(funnel_stage, "strong overall performance")}**. I will send you each video one by one with its metrics. For each video, briefly acknowledge that you have analyzed it by stating its name and its single most impactful creative element in one sentence. Do not do anything else until I tell you to. Acknowledge these instructions by saying 'Ready to analyze.'"""
+
+def create_per_video_prompt(filename, kpi_data):
+    return f"Here is the next video. Analyze it and provide your one-sentence summary as instructed.\n**Video File:** `{filename}`\n**Performance Metrics:** {kpi_data}"
+
+FINAL_SYNTHESIS_PROMPT = """Excellent. Now that you have analyzed all the videos, please generate the final, comprehensive strategic report. The report must have these three sections, using H3 markdown headers (e.g., ### Section Name). **Do not include any other text or preamble before the first section.**
+
+### 1. Campaign Performance Scorecard
+Create a Markdown table ranking the videos from best to worst. The ranking MUST be based on the KPIs most relevant to the campaign goal we discussed. The table needs three columns: "Rank", "Video Name", and "Ranking Justification". In the "Ranking Justification" column, briefly explain *why* each video earned its rank, referencing its key performance metrics and connecting them to the creative elements you observed in the video.
+
+### 2. Common Themes in Top Performers
+Identify 2-3 common creative elements, narrative structures, or visual styles shared by the top 2-3 performing videos. Explain *why* you believe these themes resonated with the audience.
+
+### 3. Actionable Recommendations
+Provide three clear, specific, and actionable recommendations for the creative team to implement in the next campaign to maximize performance.
+"""
 
 # --- UI FUNCTION to parse and display the report (Unchanged) ---
 def parse_report_and_display(report_text, all_kpis):
+    # ... This function remains the same ...
     st.subheader("🏆 Your Strategic Report", anchor=False)
     scorecard_match = re.search(r"### 1\. Campaign Performance Scorecard\s*\n*(.*?)(\n###|$)", report_text, re.DOTALL | re.IGNORECASE)
     themes_match = re.search(r"### 2\. Common Themes in Top Performers\s*\n*(.*?)(\n###|$)", report_text, re.DOTALL | re.IGNORECASE)
@@ -109,13 +88,15 @@ def parse_report_and_display(report_text, all_kpis):
     if recs_match:
         with st.expander("**Actionable Recommendations**"): st.markdown(recs_match.group(1).strip())
 
-# --- FINAL State-Based Function with "Slow and Steady" Logic ---
+
+# --- FINAL State-Based Function with Conversational Logic ---
 def render_campaign_tab(funnel_stage):
     session_state_key = f"analysis_state_{funnel_stage}"
     if session_state_key not in st.session_state:
         st.session_state[session_state_key] = {"status": "not_started", "files": [], "kpis": {}, "manual_kpis": {}}
 
     if st.session_state[session_state_key]["status"] == "not_started":
+        # ... (This entire "not_started" block is the same as before) ...
         with st.container(border=True):
             st.subheader("Step 1: Upload Assets", anchor=False, help="Upload your videos and an optional CSV with performance metrics.")
             col1, col2 = st.columns(2)
@@ -188,39 +169,49 @@ def render_campaign_tab(funnel_stage):
                         api_file = genai.get_file(name=file_info["api_file_name"])
                         if api_file.state.name == "ACTIVE": file_info["status"] = "active"; st.success(f"✅ '{file_info['original_filename']}' is ready.")
                         elif api_file.state.name == "FAILED": file_info["status"] = "failed"; st.error(f"❌ Processing failed for '{file_info['original_filename']}'.")
-                        else: all_files_ready = False; st.info(f"⏳ '{file_info['original_filename']}' is still processing...")
+                        else: all_files_ready = False; st.info(f"⏳ '{file_info['original_filename']}' is still a-processing...")
             
             if all_files_ready:
                 try:
-                    individual_summaries, active_files = [], [f for f in st.session_state[session_state_key]["files"] if f["status"] == 'active']
+                    active_files = [f for f in st.session_state[session_state_key]["files"] if f["status"] == 'active']
                     total_files = len(active_files)
-                    flash_model = genai.GenerativeModel(model_name="gemini-1.5-flash-latest")
-                    pro_model = genai.GenerativeModel(model_name="gemini-1.5-pro-latest")
+                    
+                    # Use the PRO model for its larger context and better reasoning
+                    model = genai.GenerativeModel(model_name="gemini-1.5-pro-latest")
+                    chat = model.start_chat()
+                    
+                    # Send the initial instructions
+                    with st.spinner("Initializing analysis session with AI..."):
+                         chat.send_message(create_initial_prompt(funnel_stage))
 
+                    # The slow and steady conversational loop
                     for i, file_info in enumerate(active_files):
-                        with st.spinner(f"Analyzing video {i+1}/{total_files}: '{file_info['original_filename']}'... This will take a moment."):
+                        with st.spinner(f"Analyzing video {i+1}/{total_files}: '{file_info['original_filename']}'..."):
                             original_filename = file_info["original_filename"]
                             kpis = st.session_state[session_state_key]["kpis"].get(original_filename, {})
                             kpi_text = ", ".join([f"{k}: {v}" for k, v in kpis.items() if v])
-                            prompt = create_individual_analysis_prompt(original_filename, kpi_text)
+                            
+                            prompt = create_per_video_prompt(original_filename, kpi_text)
                             api_file = genai.get_file(name=file_info["api_file_name"])
-                            response = flash_model.generate_content([prompt, api_file])
-                            individual_summaries.append(f"**Video: {original_filename}**\n{response.text}\n\n")
+                            
+                            chat.send_message([prompt, api_file])
 
+                        # The CRUCIAL delay to stay within API limits
                         if i < total_files - 1:
-                            st.info(f"Pausing for {DELAY_BETWEEN_REQUESTS_SECONDS} seconds to respect API rate limits before the next video...", icon="⏸️")
+                            st.info(f"Pausing for {DELAY_BETWEEN_REQUESTS_SECONDS}s to respect API limits...", icon="⏸️")
                             time.sleep(DELAY_BETWEEN_REQUESTS_SECONDS)
 
+                    # Final synthesis call
                     with st.spinner("All videos analyzed. Generating final strategic report..."):
-                        if individual_summaries:
-                            synthesis_prompt = create_campaign_synthesis_prompt("".join(individual_summaries), funnel_stage)
-                            final_response = generate_with_retry(pro_model, synthesis_prompt)
-                            st.session_state[session_state_key]["final_report"] = final_response.text
-                            st.session_state[session_state_key]["status"] = "complete"
-                            for file_info in st.session_state[session_state_key]["files"]:
-                                try: genai.delete_file(name=file_info["api_file_name"])
-                                except Exception: pass
-                            st.rerun()
+                        final_response = chat.send_message(FINAL_SYNTHESIS_PROMPT)
+                        st.session_state[session_state_key]["final_report"] = final_response.text
+                        st.session_state[session_state_key]["status"] = "complete"
+                        
+                        for file_info in st.session_state[session_state_key]["files"]:
+                            try: genai.delete_file(name=file_info["api_file_name"])
+                            except Exception: pass
+                        st.rerun()
+
                 except Exception as e:
                     st.error(f"A critical error occurred during the analysis workflow: {e}")
                     st.session_state[session_state_key]["status"] = "processing"
