@@ -1,6 +1,6 @@
 # ===================================================================================
-# FINAL v6.1 app.py - Enhanced UI/UX, Bonus AI Features, and Conversational Chatbot
-# This version fixes the SyntaxError from the previous version.
+# FINAL v6.2 app.py - Enhanced UI/UX, Bonus AI Features, and Conversational Chatbot
+# This version fixes the "start_chat() takes 1 positional argument" error.
 # ===================================================================================
 import os
 import google.generativeai as genai
@@ -23,7 +23,6 @@ except (TypeError, KeyError):
     st.stop()
 
 # --- Session State Initialization ---
-# This is crucial for storing the chat history and the analysis context.
 if "chat" not in st.session_state:
     st.session_state.chat = None
 if "analysis_complete" not in st.session_state:
@@ -75,13 +74,13 @@ def main_analysis_and_chat_setup(video_path, funnel_stage, metrics, deeper_analy
     if video_file.state.name == "FAILED":
         raise ValueError("Video processing failed.")
     
-    st.session_state.video_file_name = video_file.name # Store for cleanup
+    st.session_state.video_file_name = video_file.name
     
     progress_bar.progress(60, text="Video processed. Generating initial analysis...")
     model = genai.GenerativeModel(model_name="gemini-1.5-pro-latest")
     
-    # Start a chat session that includes the video context for follow-ups
-    st.session_state.chat = model.start_chat([
+    # [THE FIX IS HERE] Added the 'history=' keyword argument.
+    st.session_state.chat = model.start_chat(history=[
         {"role": "user", "parts": [video_file, "Analyze this video based on my next instructions."]},
         {"role": "model", "parts": ["I have received the video. I am ready for your analysis instructions."]}
     ])
