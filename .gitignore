@@ -1,0 +1,11 @@
+# Ignore the virtual environment
+venv/
+
+# Ignore Streamlit's secrets file
+.streamlit/
+
+# Ignore temporary files and system files
+temp_video.mp4
+*.pyc
+__pycache__/
+.DS_Store
