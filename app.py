@@ -1,6 +1,6 @@
 # ===================================================================================
-# FINAL v9.6 app.py - Robust CSV Filename Matching
-# This version correctly handles CSV filenames with or without extensions.
+# FINAL v9.7 app.py - Rate Limit Fix
+# This version adds a time.sleep(1) to prevent ResourceExhausted errors.
 # ===================================================================================
 import os
 import io
@@ -9,6 +9,7 @@ import google.generativeai as genai
 import streamlit as st
 import pandas as pd
 import tempfile
+import time # <--- Make sure time is imported
 
 # --- Configuration and Page Setup ---
 st.set_page_config(
@@ -27,7 +28,7 @@ except (TypeError, KeyError):
     st.error("🚨 A required GOOGLE_API_KEY secret is missing! Please check your secrets.", icon="❗")
     st.stop()
 
-# --- AI PROMPT ENGINEERING (Unchanged - Already Flexible) ---
+# --- AI PROMPT ENGINEERING (Unchanged) ---
 def create_individual_analysis_prompt(filename, kpi_data):
     """Creates a prompt for a CONCISE analysis of a SINGLE video."""
     return f"""
@@ -70,13 +71,10 @@ def create_campaign_synthesis_prompt(all_individual_summaries, funnel_stage):
 
 # --- UI FUNCTION to parse and display the report (Unchanged) ---
 def parse_report_and_display(report_text, all_kpis):
-    """Parses the AI's markdown report and displays it in a polished UI."""
     st.subheader("🏆 Your Strategic Report", anchor=False)
-
     scorecard_match = re.search(r"### 1\. Campaign Performance Scorecard\s*\n*(.*?)(\n###|$)", report_text, re.DOTALL | re.IGNORECASE)
     themes_match = re.search(r"### 2\. Common Themes in Top Performers\s*\n*(.*?)(\n###|$)", report_text, re.DOTALL | re.IGNORECASE)
     recs_match = re.search(r"### 3\. Actionable Recommendations\s*\n*(.*)", report_text, re.DOTALL | re.IGNORECASE)
-
     if scorecard_match:
         scorecard_md = scorecard_match.group(1).strip()
         try:
@@ -84,7 +82,6 @@ def parse_report_and_display(report_text, all_kpis):
             header = [h.strip() for h in lines[0].split('|') if h.strip()]
             data = [dict(zip(header, [d.strip() for d in row.split('|')[1:-1]])) for row in lines[1:]]
             scorecard_df = pd.DataFrame(data)
-
             top_video_name = scorecard_df['Video Name'].iloc[0].strip()
             top_kpis = all_kpis.get(top_video_name, {})
             st.success(f"**Top Performing Video: {top_video_name}**", icon="🥇")
@@ -93,23 +90,18 @@ def parse_report_and_display(report_text, all_kpis):
                     cols = st.columns(len(top_kpis) if len(top_kpis) <= 4 else 4)
                     for i, (k, v) in enumerate(top_kpis.items()):
                         if i < 4: cols[i].metric(label=k, value=v)
-            
             with st.expander("**Campaign Performance Scorecard**", expanded=True):
                 st.dataframe(scorecard_df, use_container_width=True, hide_index=True)
         except Exception as e:
             st.error(f"Could not parse the AI's scorecard. Displaying raw text. Error: {e}")
             st.markdown(scorecard_md)
-
     if themes_match:
         with st.expander("**Common Themes in Top Performers**"): st.markdown(themes_match.group(1).strip())
     if recs_match:
         with st.expander("**Actionable Recommendations**"): st.markdown(recs_match.group(1).strip())
 
-
-# --- REBUILT State-Based Function with FULLY Dynamic KPIs & Filename Fix ---
+# --- REBUILT State-Based Function with Rate-Limit Fix ---
 def render_campaign_tab(funnel_stage):
-    """Main function to render a tab's UI and logic."""
-    
     session_state_key = f"analysis_state_{funnel_stage}"
     if session_state_key not in st.session_state:
         st.session_state[session_state_key] = {"status": "not_started", "files": [], "kpis": {}, "manual_kpis": {}}
@@ -118,11 +110,8 @@ def render_campaign_tab(funnel_stage):
         with st.container(border=True):
             st.subheader("Step 1: Upload Assets", anchor=False, help="Upload your videos and an optional CSV with performance metrics.")
             col1, col2 = st.columns(2)
-            with col1:
-                uploaded_files = st.file_uploader("Upload campaign videos", type=["mp4", "mov", "avi", "m4v"], accept_multiple_files=True, key=f"uploader_{funnel_stage.lower()}")
-            with col2:
-                kpi_csv_file = st.file_uploader("Upload a CSV with your metrics (Optional)", type="csv", key=f"csv_uploader_{funnel_stage.lower()}", help="Must have a 'filename' column. The filename can be with or without the extension (e.g., .mp4).")
-
+            with col1: uploaded_files = st.file_uploader("Upload campaign videos", type=["mp4", "mov", "avi", "m4v"], accept_multiple_files=True, key=f"uploader_{funnel_stage.lower()}")
+            with col2: kpi_csv_file = st.file_uploader("Upload a CSV with your metrics (Optional)", type="csv", key=f"csv_uploader_{funnel_stage.lower()}", help="Must have a 'filename' column. The filename can be with or without the extension (e.g., .mp4).")
         if uploaded_files:
             parsed_kpis_from_csv = {}
             if kpi_csv_file:
@@ -135,26 +124,19 @@ def render_campaign_tab(funnel_stage):
                         st.success("✅ Metrics CSV loaded successfully!", icon="🎉")
                 except Exception as e:
                     st.error(f"Error reading CSV file: {e}", icon="❌")
-
             with st.container(border=True):
                 st.subheader("Step 2: Enter or Verify Metrics", anchor=False)
                 kpi_input_data = {}
-
                 for file in uploaded_files:
                     with st.expander(f"Metrics for: **{file.name}**"):
-                        # =========================================================================
-                        # THE FIX IS HERE: Checks for filename with and without extension
-                        # =========================================================================
                         basename, _ = os.path.splitext(file.name)
                         file_kpis_from_csv = parsed_kpis_from_csv.get(file.name) or parsed_kpis_from_csv.get(basename)
-
                         if file_kpis_from_csv:
                             st.markdown("###### Metrics from CSV (editable)")
                             temp_kpis = {}
                             cols = st.columns(3)
                             for i, (k, v) in enumerate(file_kpis_from_csv.items()):
-                                with cols[i % 3]:
-                                    temp_kpis[k] = st.text_input(f"**{k}**", value=v, key=f"csv_{k}_{file.name}_{funnel_stage}")
+                                with cols[i % 3]: temp_kpis[k] = st.text_input(f"**{k}**", value=v, key=f"csv_{k}_{file.name}_{funnel_stage}")
                             kpi_input_data[file.name] = temp_kpis
                         else:
                             st.info("No metrics found for this file in CSV. Add them manually below.", icon="✍️")
@@ -168,9 +150,7 @@ def render_campaign_tab(funnel_stage):
                                 if name and value: temp_manual_kpis[name] = value
                             kpi_input_data[file.name] = temp_manual_kpis
                             if st.button("Add Metric", key=f"add_kpi_{file.name}_{funnel_stage}"):
-                                st.session_state[session_state_key]["manual_kpis"][file.name].append({"name": "", "value": ""})
-                                st.rerun()
-            
+                                st.session_state[session_state_key]["manual_kpis"][file.name].append({"name": "", "value": ""}); st.rerun()
             if st.button(f"🚀 Analyze {funnel_stage} Campaign", type="primary", use_container_width=True, key=f"start_button_{funnel_stage.lower()}"):
                 st.session_state[session_state_key]["kpis"] = kpi_input_data
                 files_to_process = [f for f in uploaded_files if any(kpi_input_data.get(f.name, {}).values())]
@@ -186,9 +166,7 @@ def render_campaign_tab(funnel_stage):
                                 st.session_state[session_state_key]["files"].append({"original_filename": file.name, "api_file_name": video_file_for_api.name, "status": "processing"})
                                 os.remove(tmp.name)
                             except Exception as e: st.error(f"Failed to upload '{file.name}': {e}")
-                    st.session_state[session_state_key]["status"] = "processing"
-                    st.rerun()
-
+                    st.session_state[session_state_key]["status"] = "processing"; st.rerun()
     elif st.session_state[session_state_key]["status"] == "processing":
         st.info("🔄 Videos are being processed by Google...", icon="⏳")
         st.write("Click the button below to check the status. Once all videos are ready, the report will be generated.")
@@ -212,6 +190,12 @@ def render_campaign_tab(funnel_stage):
                         api_file = genai.get_file(name=file_info["api_file_name"])
                         response = genai.GenerativeModel(model_name="gemini-1.5-flash-latest").generate_content([prompt, api_file])
                         individual_summaries.append(f"**Video: {original_filename}**\n{response.text}\n\n")
+                        
+                        # =========================================================================
+                        # THE FIX IS HERE: Add a 1-second delay to avoid rate limiting
+                        # =========================================================================
+                        time.sleep(1)
+
                     if individual_summaries:
                         synthesis_prompt = create_campaign_synthesis_prompt("".join(individual_summaries), funnel_stage)
                         final_response = genai.GenerativeModel(model_name="gemini-1.5-pro-latest").generate_content(synthesis_prompt)
@@ -221,16 +205,13 @@ def render_campaign_tab(funnel_stage):
                             try: genai.delete_file(name=file_info["api_file_name"])
                             except Exception: pass
                         st.rerun()
-
     elif st.session_state[session_state_key]["status"] == "complete":
         parse_report_and_display(st.session_state[session_state_key].get("final_report", "Report not found."), st.session_state[session_state_key].get("kpis", {}))
         if st.button(f"↩️ Start New {funnel_stage} Analysis", use_container_width=True, key=f"reset_button_{funnel_stage.lower()}"):
-            st.session_state[session_state_key] = {"status": "not_started", "files": [], "kpis": {}, "manual_kpis": {}}
-            st.rerun()
+            st.session_state[session_state_key] = {"status": "not_started", "files": [], "kpis": {}, "manual_kpis": {}}; st.rerun()
 
 # --- Create the Tabs and Render Content ---
 tab1, tab2, tab3 = st.tabs(["**Awareness**", "**Traffic**", "**Conversion**"])
 with tab1: render_campaign_tab("Awareness")
 with tab2: render_campaign_tab("Traffic")
 with tab3: render_campaign_tab("Conversion")
-
