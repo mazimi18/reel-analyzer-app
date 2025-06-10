@@ -1,7 +1,7 @@
 # ===================================================================================
-# FINAL v12.0 app.py - The "Slow and Steady" Hybrid Solution
-# This version uses an N+1 call structure with significant delays to respect
-# both the Requests Per Minute (RPM) and Tokens Per Minute (TPM) free tier limits.
+# FINAL v12.1 app.py - Corrected NameError Import
+# This version fixes the "name 'google' is not defined" error by correctly
+# importing the ResourceExhausted exception class.
 # ===================================================================================
 import os
 import io
@@ -11,10 +11,9 @@ import streamlit as st
 import pandas as pd
 import tempfile
 import time
+from google.api_core.exceptions import ResourceExhausted # <--- THE CRITICAL FIX IS HERE
 
 # --- CONFIGURATION CONSTANT ---
-# This is the most important setting. It's the pause between each individual video analysis.
-# 20 seconds is a safe value for the free tier to avoid TPM/RPM limits.
 DELAY_BETWEEN_REQUESTS_SECONDS = 20
 
 # --- Configuration and Page Setup ---
@@ -41,7 +40,7 @@ def generate_with_retry(model, prompt, retries=3, base_delay=25):
         try:
             response = model.generate_content(prompt)
             return response
-        except google.api_core.exceptions.ResourceExhausted as e:
+        except ResourceExhausted as e: # <--- AND THE FIX IS USED HERE
             num_attempts += 1
             if num_attempts < retries:
                 st.warning(f"Final analysis API limit hit. Retrying in {base_delay}s... (Attempt {num_attempts}/{retries})", icon="⏳")
@@ -81,7 +80,6 @@ def create_campaign_synthesis_prompt(all_individual_summaries, funnel_stage):
 
 # --- UI FUNCTION to parse and display the report (Unchanged) ---
 def parse_report_and_display(report_text, all_kpis):
-    # ... This function remains the same ...
     st.subheader("🏆 Your Strategic Report", anchor=False)
     scorecard_match = re.search(r"### 1\. Campaign Performance Scorecard\s*\n*(.*?)(\n###|$)", report_text, re.DOTALL | re.IGNORECASE)
     themes_match = re.search(r"### 2\. Common Themes in Top Performers\s*\n*(.*?)(\n###|$)", report_text, re.DOTALL | re.IGNORECASE)
@@ -118,7 +116,6 @@ def render_campaign_tab(funnel_stage):
         st.session_state[session_state_key] = {"status": "not_started", "files": [], "kpis": {}, "manual_kpis": {}}
 
     if st.session_state[session_state_key]["status"] == "not_started":
-        # ... (This entire "not_started" block is the same as before) ...
         with st.container(border=True):
             st.subheader("Step 1: Upload Assets", anchor=False, help="Upload your videos and an optional CSV with performance metrics.")
             col1, col2 = st.columns(2)
@@ -197,11 +194,9 @@ def render_campaign_tab(funnel_stage):
                 try:
                     individual_summaries, active_files = [], [f for f in st.session_state[session_state_key]["files"] if f["status"] == 'active']
                     total_files = len(active_files)
-                    
                     flash_model = genai.GenerativeModel(model_name="gemini-1.5-flash-latest")
                     pro_model = genai.GenerativeModel(model_name="gemini-1.5-pro-latest")
 
-                    # The slow and steady loop for individual analysis
                     for i, file_info in enumerate(active_files):
                         with st.spinner(f"Analyzing video {i+1}/{total_files}: '{file_info['original_filename']}'... This will take a moment."):
                             original_filename = file_info["original_filename"]
@@ -209,29 +204,23 @@ def render_campaign_tab(funnel_stage):
                             kpi_text = ", ".join([f"{k}: {v}" for k, v in kpis.items() if v])
                             prompt = create_individual_analysis_prompt(original_filename, kpi_text)
                             api_file = genai.get_file(name=file_info["api_file_name"])
-                            
                             response = flash_model.generate_content([prompt, api_file])
                             individual_summaries.append(f"**Video: {original_filename}**\n{response.text}\n\n")
 
-                        # The CRUCIAL delay to stay within API limits
                         if i < total_files - 1:
                             st.info(f"Pausing for {DELAY_BETWEEN_REQUESTS_SECONDS} seconds to respect API rate limits before the next video...", icon="⏸️")
                             time.sleep(DELAY_BETWEEN_REQUESTS_SECONDS)
 
-                    # Final synthesis call with retry logic
                     with st.spinner("All videos analyzed. Generating final strategic report..."):
                         if individual_summaries:
                             synthesis_prompt = create_campaign_synthesis_prompt("".join(individual_summaries), funnel_stage)
                             final_response = generate_with_retry(pro_model, synthesis_prompt)
-                            
                             st.session_state[session_state_key]["final_report"] = final_response.text
                             st.session_state[session_state_key]["status"] = "complete"
-                            
                             for file_info in st.session_state[session_state_key]["files"]:
                                 try: genai.delete_file(name=file_info["api_file_name"])
                                 except Exception: pass
                             st.rerun()
-
                 except Exception as e:
                     st.error(f"A critical error occurred during the analysis workflow: {e}")
                     st.session_state[session_state_key]["status"] = "processing"
