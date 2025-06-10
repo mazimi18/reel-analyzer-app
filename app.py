@@ -1,12 +1,12 @@
 # ===================================================================================
-# FINAL v16.0 app.py - The "YouTube" Experience
-# This version features a complete UI overhaul with a dark theme, a two-column
-# report layout, proactive AI-generated creative ideas, and an interactive chatbot
-# to query the results. Designed for the Google AI paid tier.
+# FINAL v17.0 app.py - The Robust "YouTube" Experience
+# This version uses JSON for robust data parsing, fixes all known bugs,
+# and significantly enhances the UI to more closely resemble YouTube.
 # ===================================================================================
 import os
 import io
 import re
+import json # <-- Import JSON for robust parsing
 import google.generativeai as genai
 import streamlit as st
 import pandas as pd
@@ -20,82 +20,82 @@ st.set_page_config(
     layout="wide"
 )
 
-# Custom CSS to mimic YouTube's dark theme
+# Custom CSS to mimic YouTube's dark theme more accurately
 def apply_youtube_style():
     st.markdown("""
         <style>
+            @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
+            
             /* Main App Background */
+            html, body, [class*="st-"] {
+                font-family: 'Roboto', sans-serif;
+            }
             .stApp {
                 background-color: #0f0f0f;
-                color: #ffffff;
-            }
-            /* Main Content Font */
-            body, .st-emotion-cache-183lzff {
-                color: #ffffff;
+                color: #f1f1f1;
             }
             /* Headers */
-            h1, h2, h3, h4, h5, h6 {
+            h1, h2, h3 {
                 color: #ffffff !important;
             }
-            /* Expander Headers */
-            .st-emotion-cache-1h6x6un, .st-emotion-cache-p5c4w8 {
-                background-color: #272727;
-            }
+            h1 { font-weight: 700; }
+            h3 { font-weight: 500; }
             /* Containers & Cards */
             .st-emotion-cache-1r6slb0, .st-emotion-cache-1bp2ih8 {
                 background-color: #181818;
                 border: 1px solid #383838;
                 border-radius: 12px;
+                padding: 1rem;
             }
             /* Buttons */
             .stButton > button {
                 background-color: #c00;
                 color: white;
                 border-radius: 18px;
-                border: none;
-                padding: 10px 20px;
+                border: 1px solid #c00;
+                padding: 8px 16px;
+                font-weight: 500;
             }
             .stButton > button:hover {
-                background-color: #900;
+                background-color: #990000;
+                border-color: #990000;
                 color: white;
-            }
-            /* File Uploader */
-            .st-emotion-cache-1ftd7j {
-                background-color: #272727;
             }
             /* Tabs */
             .st-emotion-cache-1gulkj5 button {
-                background-color: #121212;
                 border-radius: 8px;
+                color: #f1f1f1;
             }
             .st-emotion-cache-1gulkj5 button[aria-selected="true"] {
-                background-color: #ff0000;
+                background-color: #ffffff;
+                color: #0f0f0f;
             }
             /* Sidebar/Chat Area */
-            .st-emotion-cache-16txtl3 {
+            [data-testid="stSidebar"] {
                 background-color: #181818;
-                border-radius: 12px;
-                padding: 20px;
+                padding: 1rem;
+            }
+            /* Dataframe styling */
+            .stDataFrame {
+                background-color: #181818;
             }
         </style>
     """, unsafe_allow_html=True)
 
 apply_youtube_style()
 
-
 # --- 2. THE REST OF YOUR APP STARTS HERE ---
 st.title("🎬 AI Campaign Strategist")
 st.markdown("##### Upload your campaign videos and metrics to get an expert-level report on what creative works... and *why*.")
-
 
 # --- Secret & API Configuration ---
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 except (TypeError, KeyError):
-    st.error("🚨 A required GOOGLE_API_KEY secret is missing! Please check your secrets.", icon="❗")
+    st.error("🚨 A required GOOGLE_API_KEY secret is missing!", icon="❗")
     st.stop()
 
-# --- AI PROMPT ENGINEERING 3.0 (With Creative Generation & Chat) ---
+# --- AI PROMPT ENGINEERING 4.0 (JSON for Data) ---
 def create_comprehensive_analysis_prompt(all_kpi_data, funnel_stage):
     priority_metrics = {
         "Awareness": "impressions, high Video View Rate, and low CPM",
@@ -116,19 +116,28 @@ def create_comprehensive_analysis_prompt(all_kpi_data, funnel_stage):
     ---
 
     **Your Comprehensive Task:**
-    Analyze every video file and its data. Generate a final strategic report with these FIVE sections, using H3 markdown headers (e.g., ### Section Name). **Do not include any other text before the first section.**
+    Analyze every video file and its data. Generate a final strategic report with FIVE sections.
 
-    ### 1. Campaign Performance Scorecard
-    Create a Markdown table ranking the videos from best to worst based on the campaign goal. Columns: "Rank", "Video Name", and "Ranking Justification". In the "Ranking Justification", explain *why* each video earned its rank, linking creative elements to specific performance metrics.
+    **IMPORTANT INSTRUCTION:** For the first section, "Campaign Performance Scorecard", you MUST provide the output as a single, valid JSON array of objects. Each object should have three keys: "rank" (integer), "video_name" (string), and "justification" (string). Enclose the entire JSON block in ```json ... ```.
+
+    For all other sections, use standard H3 markdown headers (e.g., ### Section Name).
+
+    **SECTION 1: CAMPAIGN PERFORMANCE SCORECARD (JSON aRRAY)**
+    ```json
+    [
+      {{"rank": 1, "video_name": "example_video_1.mp4", "justification": "This video ranked first due to its outstanding ROAS of 7.2, directly aligning with the conversion goal. The clear product shot in the first 3 seconds likely drove this performance."}},
+      {{"rank": 2, "video_name": "example_video_2.mp4", "justification": "Ranked second with a solid ROAS of 4.5. The user-generated content style was effective, but the call-to-action was less prominent than the top performer."}}
+    ]
+    ```
 
     ### 2. Common Themes in Top Performers
-    Identify 2-3 common creative elements (e.g., "fast-paced editing", "user-generated content style", "direct-to-camera address") shared by the top-performing videos.
+    (Your analysis here...)
 
     ### 3. Actionable Recommendations
-    Provide three clear, specific recommendations for the next campaign. These should be strategic takeaways.
+    (Your analysis here...)
 
     ### 4. New Creative Ideas (Ad Scripts)
-    Based on the top performers, write TWO new, short video ad scripts (15-20 seconds each). Format them clearly with 'Scene' and 'VO' (Voiceover) or 'Text on Screen' instructions. Title them "Concept A" and "Concept B".
+    Write TWO new, short video ad scripts (15-20 seconds each). Format them clearly with 'Scene' and 'VO' (Voiceover) or 'Text on Screen' instructions. Title them "Concept A" and "Concept B".
 
     ### 5. Suggested Ad Copy
     Write three variations of ad copy (headline and body text) that could be used with the new creative ideas. Label them "Copy Variation 1", "Copy Variation 2", and "Copy Variation 3".
@@ -136,7 +145,6 @@ def create_comprehensive_analysis_prompt(all_kpi_data, funnel_stage):
 
 def create_chatbot_prompt(report_text):
     return f"""You are a helpful AI assistant. Your ONLY job is to answer questions about the following marketing report. Do not answer questions outside the scope of this report. Be concise and helpful.
-
     **THE REPORT:**
     ---
     {report_text}
@@ -147,45 +155,55 @@ def create_chatbot_prompt(report_text):
 def parse_report_and_display(report_text, all_kpis):
     st.subheader("🏆 Strategic Campaign Report", anchor=False)
 
-    # --- Top Performer Dashboard ---
+    # --- Robust JSON Parsing for Scorecard ---
     try:
-        scorecard_md = re.search(r"### 1\. Campaign Performance Scorecard\s*\n*(.*?)(\n###|$)", report_text, re.DOTALL | re.IGNORECASE).group(1).strip()
-        lines = [line.strip() for line in scorecard_md.split('\n') if line.strip() and not line.strip().startswith('---')]
-        header = [h.strip() for h in lines[0].split('|') if h.strip()]
-        data = [dict(zip(header, [d.strip() for d in row.split('|')[1:-1]])) for row in lines[1:]]
-        scorecard_df = pd.DataFrame(data)
-        top_video_name = scorecard_df['Video Name'].iloc[0].strip()
-        top_kpis = all_kpis.get(top_video_name, {})
-        
-        st.subheader(f"🥇 Top Performer: {top_video_name}")
-        with st.container(border=True):
-            cols = st.columns(len(top_kpis) if len(top_kpis) <= 4 else 4)
-            for i, (k, v) in enumerate(top_kpis.items()):
-                if i < 4: cols[i].metric(label=k, value=v)
-    except Exception:
-        st.warning("Could not parse top performer data.")
+        # Use regex to find the JSON block
+        json_match = re.search(r"```json\s*\n([\s\S]*?)\n```", report_text)
+        if json_match:
+            json_string = json_match.group(1)
+            scorecard_data = json.loads(json_string)
+            scorecard_df = pd.DataFrame(scorecard_data)
+            scorecard_df.rename(columns={'rank': 'Rank', 'video_name': 'Video Name', 'justification': 'Ranking Justification'}, inplace=True)
+            
+            top_video_name = scorecard_df['Video Name'].iloc[0]
+            top_kpis = all_kpis.get(top_video_name, {})
+            
+            st.subheader(f"🥇 Top Performer: {top_video_name}")
+            if top_kpis:
+                 with st.container(border=True):
+                    cols = st.columns(len(top_kpis) if len(top_kpis) <= 4 else 4)
+                    for i, (k, v) in enumerate(top_kpis.items()):
+                        if i < 4: cols[i].metric(label=k, value=v)
 
-    # --- Report Sections ---
-    report_sections = re.findall(r"### (.*?)\n(.*?)(?=\n### |\Z)", report_text, re.DOTALL)
-    for title, content in report_sections:
-        with st.expander(f"**{title.strip()}**", expanded=(title.startswith("1. Campaign"))):
+            with st.expander("**Campaign Performance Scorecard**", expanded=True):
+                st.dataframe(scorecard_df, use_container_width=True, hide_index=True)
+        else:
+            raise ValueError("No JSON block found for the scorecard.")
+
+    except (ValueError, json.JSONDecodeError, IndexError) as e:
+        st.error(f"Could not parse top performer data or scorecard. Error: {e}", icon="🚨")
+        # Fallback to show the raw scorecard text if parsing fails
+        scorecard_raw_match = re.search(r"### 1\..*Scorecard\s*\n*(.*?)(\n###|$)", report_text, re.DOTALL | re.IGNORECASE)
+        if scorecard_raw_match:
+            st.text(scorecard_raw_match.group(1).strip())
+
+    # --- Markdown Parsing for other sections ---
+    report_sections = re.findall(r"### (2|3|4|5)\. (.*?)\n(.*?)(?=\n### |\Z)", report_text, re.DOTALL)
+    for num, title, content in report_sections:
+        with st.expander(f"**{num}. {title.strip()}**"):
             st.markdown(content.strip())
 
 # --- MAIN APP LOGIC ---
 def render_campaign_tab(funnel_stage):
     session_state_key = f"analysis_state_{funnel_stage}"
     if session_state_key not in st.session_state:
+        # THE KEYERROR FIX: Initialize chat_messages here
         st.session_state[session_state_key] = {
-            "status": "not_started",
-            "files": [],
-            "kpis": {},
-            "manual_kpis": {},
-            "chat_messages": []
+            "status": "not_started", "files": [], "kpis": {}, "manual_kpis": {}, "chat_messages": []
         }
-
-    # --- State 1: Upload ---
+    
+    # ... The "not_started" and "processing" states are unchanged and robust ...
     if st.session_state[session_state_key]["status"] == "not_started":
-        # ... (This logic is robust and unchanged) ...
         with st.container(border=True):
             st.subheader("Step 1: Upload Assets", anchor=False)
             col1, col2 = st.columns(2)
@@ -241,10 +259,7 @@ def render_campaign_tab(funnel_stage):
                                 os.remove(tmp.name)
                             except Exception as e: st.error(f"Failed to upload '{file.name}': {e}")
                     st.session_state[session_state_key]["status"] = "processing"; st.rerun()
-
-    # --- State 2: Processing ---
     elif st.session_state[session_state_key]["status"] == "processing":
-        # ... (This logic is robust and unchanged) ...
         st.info("🔄 Videos are being processed... Click below when ready.", icon="⏳")
         if st.button("Check Status & Generate Report", use_container_width=True, key=f"check_button_{funnel_stage.lower()}"):
             all_files_ready = True
@@ -275,50 +290,31 @@ def render_campaign_tab(funnel_stage):
                     except Exception as e:
                         st.error(f"An error occurred during analysis: {e}")
                         st.session_state[session_state_key]["status"] = "processing"
-
-    # --- State 3: Complete (Report & Chatbot) ---
     elif st.session_state[session_state_key]["status"] == "complete":
         main_col, chat_col = st.columns([2, 1])
-        
         with main_col:
             parse_report_and_display(st.session_state[session_state_key].get("final_report", ""), st.session_state[session_state_key].get("kpis", {}))
-
         with chat_col:
-            st.subheader("💬 Chat with your Report")
-            
-            # Initialize chat history if it's the first run
-            if not st.session_state[session_state_key]["chat_messages"]:
-                st.session_state[session_state_key]["chat_messages"] = [{"role": "assistant", "content": "Ask me anything about this report!"}]
-
-            # Display chat messages
-            for message in st.session_state[session_state_key]["chat_messages"]:
-                with st.chat_message(message["role"]):
-                    st.markdown(message["content"])
-
-            # Chat input
-            if prompt := st.chat_input("E.g., 'Summarize the top recommendation'"):
-                st.session_state[session_state_key]["chat_messages"].append({"role": "user", "content": prompt})
-                with st.chat_message("user"):
-                    st.markdown(prompt)
-
-                with st.chat_message("assistant"):
-                    with st.spinner("Thinking..."):
-                        try:
-                            chatbot_model = genai.GenerativeModel(model_name="gemini-1.5-pro")
-                            # Create a chat session with the report as context
-                            chat = chatbot_model.start_chat(
-                                history=[
+            with st.container(border=True):
+                st.subheader("💬 Chat with your Report")
+                for message in st.session_state[session_state_key]["chat_messages"]:
+                    with st.chat_message(message["role"]):
+                        st.markdown(message["content"])
+                if prompt := st.chat_input("E.g., 'Summarize the top recommendation'"):
+                    st.session_state[session_state_key]["chat_messages"].append({"role": "user", "content": prompt})
+                    with st.chat_message("user"): st.markdown(prompt)
+                    with st.chat_message("assistant"):
+                        with st.spinner("Thinking..."):
+                            try:
+                                chatbot_model = genai.GenerativeModel(model_name="gemini-1.5-pro")
+                                chat = chatbot_model.start_chat(history=[
                                     {'role': 'user', 'parts': [create_chatbot_prompt(st.session_state[session_state_key]["final_report"])]},
                                     {'role': 'model', 'parts': ["Understood. I will only answer questions about the provided report."]}
-                                ]
-                            )
-                            response = chat.send_message(prompt)
-                            st.markdown(response.text)
-                            st.session_state[session_state_key]["chat_messages"].append({"role": "assistant", "content": response.text})
-                        except Exception as e:
-                            st.error(f"Sorry, I couldn't process that. Error: {e}")
-
-        # Reset button at the bottom
+                                ])
+                                response = chat.send_message(prompt)
+                                st.markdown(response.text)
+                                st.session_state[session_state_key]["chat_messages"].append({"role": "assistant", "content": response.text})
+                            except Exception as e: st.error(f"Sorry, I couldn't process that. Error: {e}")
         if st.button("↩️ Start New Analysis", use_container_width=True, key=f"reset_button_{funnel_stage.lower()}"):
             st.session_state[session_state_key] = {"status": "not_started", "files": [], "kpis": {}, "manual_kpis": {}, "chat_messages": []}; st.rerun()
 
